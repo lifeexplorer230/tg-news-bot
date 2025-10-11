@@ -7,6 +7,7 @@ from typing import List
 from database.db import Database
 from utils.logger import setup_logger
 from utils.config import Config
+from utils.timezone import now_utc
 
 logger = setup_logger(__name__)
 
@@ -106,7 +107,7 @@ class TelegramListener:
                 return
 
             # Проверяем что сообщение не старше 24 часов (для случая reconnect)
-            if message.date < datetime.now(timezone.utc) - timedelta(hours=24):
+            if message.date < now_utc() - timedelta(hours=24):
                 return
 
             # Получаем информацию о канале

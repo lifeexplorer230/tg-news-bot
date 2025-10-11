@@ -10,6 +10,7 @@ from services.embeddings import EmbeddingService
 from services.gemini_client import GeminiClient
 from utils.logger import get_logger
 from utils.config import Config
+from utils.timezone import now_msk
 
 logger = get_logger(__name__)
 
@@ -456,7 +457,7 @@ class MarketplaceProcessor:
         logger.info(f"📤 Публикация {len(posts)} новостей в {target_channel}")
 
         # Формируем дайджест
-        yesterday = datetime.now() - timedelta(days=1)
+        yesterday = now_msk() - timedelta(days=1)
         date_str = yesterday.strftime("%d-%m-%Y")
 
         lines = [f"📌 Главные новости {marketplace.upper()} за {date_str}\n"]

@@ -7,6 +7,7 @@ from typing import List, Dict, Optional, Tuple
 import numpy as np
 
 from utils.logger import setup_logger
+from utils.timezone import now_msk
 
 logger = setup_logger(__name__)
 
@@ -29,6 +30,7 @@ class Database:
     def connect(self):
         """Подключение к базе данных"""
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self.conn.execute('PRAGMA journal_mode=WAL')
         self.conn.row_factory = sqlite3.Row  # Для доступа по именам столбцов
         return self.conn
 
@@ -197,7 +199,7 @@ class Database:
             Список сообщений
         """
         cursor = self.conn.cursor()
-        cutoff_time = datetime.now() - timedelta(hours=hours)
+        cutoff_time = now_msk() - timedelta(hours=hours)
 
         cursor.execute('''
             SELECT m.*, c.username as channel_username
@@ -272,7 +274,7 @@ class Database:
             Список (id, embedding)
         """
         cursor = self.conn.cursor()
-        cutoff_time = datetime.now() - timedelta(days=days)
+        cutoff_time = now_msk() - timedelta(days=days)
 
         cursor.execute('''
             SELECT id, embedding FROM published
@@ -333,8 +335,8 @@ class Database:
         """
         cursor = self.conn.cursor()
 
-        raw_cutoff = datetime.now() - timedelta(days=raw_days)
-        published_cutoff = datetime.now() - timedelta(days=published_days)
+        raw_cutoff = now_msk() - timedelta(days=raw_days)
+        published_cutoff = now_msk() - timedelta(days=published_days)
 
         # Удаляем старые сырые сообщения
         cursor.execute('DELETE FROM raw_messages WHERE date < ?', (raw_cutoff,))
@@ -414,4 +416,5 @@ class Database:
         """Закрыть соединение с БД"""
         if self.conn:
             self.conn.close()
+            self.conn = None
             logger.info("Соединение с БД закрыто")

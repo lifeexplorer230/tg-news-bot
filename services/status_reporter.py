@@ -2,7 +2,9 @@
 import asyncio
 from datetime import datetime
 from telethon import TelegramClient
+from database.db import Database
 from utils.logger import setup_logger
+from utils.timezone import now_msk
 
 logger = setup_logger(__name__)
 
@@ -10,16 +12,17 @@ logger = setup_logger(__name__)
 class StatusReporter:
     """Отправка статуса бота в группу"""
 
-    def __init__(self, config, db):
+    def __init__(self, config, db=None):
         """
         Инициализация Status Reporter
 
         Args:
             config: Конфигурация
-            db: Database instance
+            db: Database instance (опционально)
         """
         self.config = config
-        self.db = db
+        self._owns_db = db is None
+        self.db = db or Database(config.db_path)
         self.status_chat = config.get('status.chat', 'Soft Status')
         self.bot_name = config.get('status.bot_name', 'Marketplace News Bot')
 
@@ -30,7 +33,7 @@ class StatusReporter:
             stats = self.db.get_today_stats()
 
             # Формируем сообщение
-            now = datetime.now()
+            now = now_msk()
             time_str = now.strftime("%H:%M:%S")
             date_str = now.strftime("%d.%m.%Y")
 
@@ -65,15 +68,18 @@ class StatusReporter:
 
         except Exception as e:
             logger.error(f"❌ Ошибка отправки статуса: {e}", exc_info=True)
+        finally:
+            if self._owns_db:
+                self.db.close()
 
 
-async def run_status_reporter(config, db):
+async def run_status_reporter(config, db=None):
     """
     Запустить отправку статуса
 
     Args:
         config: Конфигурация
-        db: Database instance
+        db: Database instance (опционально)
     """
     reporter = StatusReporter(config, db)
     await reporter.send_status()
