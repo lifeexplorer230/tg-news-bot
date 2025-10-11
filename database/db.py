@@ -66,6 +66,13 @@ class Database:
             )
         ''')
 
+        # Добавляем новое поле если его нет
+        cursor.execute("PRAGMA table_info(raw_messages)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'rejection_reason' not in columns:
+            cursor.execute('ALTER TABLE raw_messages ADD COLUMN rejection_reason TEXT')
+            logger.info("Добавлено поле rejection_reason в raw_messages")
+
         # Индексы для raw_messages
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_processed
@@ -204,14 +211,26 @@ class Database:
         return [dict(row) for row in cursor.fetchall()]
 
     def mark_as_processed(self, message_id: int, is_duplicate: bool = False,
-                         gemini_score: Optional[int] = None):
-        """Пометить сообщение как обработанное"""
+                         gemini_score: Optional[int] = None,
+                         rejection_reason: Optional[str] = None):
+        """
+        Пометить сообщение как обработанное
+
+        Args:
+            message_id: ID сообщения
+            is_duplicate: Является ли сообщение дубликатом
+            gemini_score: Оценка Gemini (для публикаций)
+            rejection_reason: Причина отклонения (если не опубликовано)
+        """
         cursor = self.conn.cursor()
         cursor.execute('''
             UPDATE raw_messages
-            SET processed = 1, is_duplicate = ?, gemini_score = ?
+            SET processed = 1,
+                is_duplicate = ?,
+                gemini_score = ?,
+                rejection_reason = ?
             WHERE id = ?
-        ''', (is_duplicate, gemini_score, message_id))
+        ''', (is_duplicate, gemini_score, rejection_reason, message_id))
         self.conn.commit()
 
     # ====== РАБОТА С ОПУБЛИКОВАННЫМИ ПОСТАМИ ======
