@@ -346,12 +346,15 @@ class Database:
         cursor.execute('DELETE FROM published WHERE published_at < ?', (published_cutoff,))
         published_deleted = cursor.rowcount
 
-        # VACUUM для сжатия БД
-        cursor.execute('VACUUM')
-
+        # Коммитим транзакцию перед VACUUM
         self.conn.commit()
+
+        # VACUUM для сжатия БД (должен быть вне транзакции)
+        cursor.execute('VACUUM')
         logger.info(f"Очистка БД: удалено {raw_deleted} сырых сообщений, "
                    f"{published_deleted} опубликованных постов")
+
+        return {'raw': raw_deleted, 'published': published_deleted}
 
     def get_stats(self) -> Dict:
         """Получить статистику по базе"""
