@@ -1,8 +1,41 @@
 """Клиент для работы с Google Gemini API"""
-import google.generativeai as genai
 import json
-from typing import List, Dict, Optional
+import re
+import time
+from typing import Dict, List, Optional
+
+import google.generativeai as genai
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 from utils.logger import setup_logger
+
+
+class NewsItem(BaseModel):
+    """Pydantic-модель для валидации новостей Gemini."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: int
+    title: str
+    description: str
+    score: int = Field(ge=1, le=10)
+    reason: Optional[str] = None
+    source_link: Optional[str] = None
+    source_message_id: Optional[int] = None
+    source_channel_id: Optional[int] = None
+    text: Optional[str] = None
+    marketplace: Optional[str] = None
+    category: Optional[str] = None
+
+
+class CategoryNews(BaseModel):
+    """Pydantic-модель для валидации новостей по категориям маркетплейсов."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    wildberries: List[NewsItem] = Field(default_factory=list)
+    ozon: List[NewsItem] = Field(default_factory=list)
+    general: List[NewsItem] = Field(default_factory=list)
 
 logger = setup_logger(__name__)
 
@@ -22,6 +55,41 @@ class GeminiClient:
         self.model = genai.GenerativeModel(model_name)
         logger.info(f"Gemini клиент инициализирован: {model_name}")
 
+    def _log_api_call(self, method_name: str, prompt: str, response_text: str, duration: float):
+        """
+        Детальное логирование вызова Gemini API
+
+        Args:
+            method_name: Название метода
+            prompt: Отправленный промпт
+            response_text: Полученный ответ
+            duration: Время выполнения в секундах
+        """
+        # Логируем метаданные
+        logger.info(f"[Gemini] {method_name}: промпт {len(prompt)} символов, "
+                   f"ответ {len(response_text)} символов, время {duration:.2f}s")
+
+        # Логируем промпт (с ограничением)
+        max_log_length = 2000
+        if len(prompt) <= max_log_length:
+            logger.debug(f"[Gemini] {method_name} ПРОМПТ:\n{prompt}")
+        else:
+            logger.debug(f"[Gemini] {method_name} ПРОМПТ (обрезан до {max_log_length} символов):\n"
+                        f"{prompt[:max_log_length]}...")
+
+        # Логируем полный ответ (с ограничением)
+        if len(response_text) <= max_log_length:
+            logger.debug(f"[Gemini] {method_name} ОТВЕТ:\n{response_text}")
+        else:
+            logger.debug(f"[Gemini] {method_name} ОТВЕТ (обрезан до {max_log_length} символов):\n"
+                        f"{response_text[:max_log_length]}...")
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((Exception,)),
+        reraise=True,
+    )
     def select_top_news(self, messages: List[Dict], top_n: int = 10) -> List[Dict]:
         """
         Отобрать ТОП-N самых интересных новостей про AI
@@ -80,11 +148,13 @@ class GeminiClient:
 Верни ТОЛЬКО JSON, без дополнительного текста."""
 
         try:
+            start_time = time.time()
             response = self.model.generate_content(prompt)
             result_text = response.text.strip()
+            duration = time.time() - start_time
 
-            # Логируем ответ для отладки
-            logger.debug(f"Gemini ответ (первые 500 символов): {result_text[:500]}")
+            # Детальное логирование
+            self._log_api_call("select_top_news", prompt, result_text, duration)
 
             # Извлекаем JSON из ответа (иногда Gemini добавляет ```json```)
             if "```json" in result_text:
@@ -114,6 +184,12 @@ class GeminiClient:
             logger.error(f"Ошибка при отборе новостей через Gemini: {e}")
             return []
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((Exception,)),
+        reraise=True,
+    )
     def format_news_post(self, text: str, channel: str, message_link: str = None) -> Optional[Dict]:
         """
         Отформатировать новость в структурированный формат
@@ -151,8 +227,13 @@ class GeminiClient:
 Верни ТОЛЬКО JSON, без дополнительного текста."""
 
         try:
+            start_time = time.time()
             response = self.model.generate_content(prompt)
             result_text = response.text.strip()
+            duration = time.time() - start_time
+
+            # Детальное логирование
+            self._log_api_call("format_news_post", prompt, result_text, duration)
 
             # Извлекаем JSON из ответа
             if "```json" in result_text:
@@ -171,6 +252,12 @@ class GeminiClient:
             logger.error(f"Ошибка форматирования поста через Gemini: {e}")
             return None
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((Exception,)),
+        reraise=True,
+    )
     def select_and_format_news(self, messages: List[Dict], top_n: int = 10) -> List[Dict]:
         """
         НОВАЯ СХЕМА: Отобрать И отформатировать ТОП-N новостей одним запросом
@@ -242,11 +329,13 @@ class GeminiClient:
 Верни ТОЛЬКО JSON, без дополнительного текста."""
 
         try:
+            start_time = time.time()
             response = self.model.generate_content(prompt)
             result_text = response.text.strip()
+            duration = time.time() - start_time
 
-            # Логируем ответ для отладки
-            logger.debug(f"Gemini ответ (первые 500 символов): {result_text[:500]}")
+            # Детальное логирование
+            self._log_api_call("select_and_format_news", prompt, result_text, duration)
 
             # Извлекаем JSON из ответа
             if "```json" in result_text:
@@ -265,6 +354,12 @@ class GeminiClient:
                     return []
 
             selected = json.loads(result_text)
+            try:
+                validated_items = [NewsItem(**item) for item in selected]
+                selected = [item.model_dump() for item in validated_items]
+            except ValidationError as e:
+                logger.error(f"Ошибка валидации JSON от Gemini: {e}")
+                return []
 
             # Добавляем source_link к каждой новости
             messages_dict = {msg['id']: msg for msg in messages}
@@ -288,6 +383,12 @@ class GeminiClient:
             logger.error(f"Ошибка при отборе и форматировании новостей через Gemini: {e}")
             return []
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((Exception,)),
+        reraise=True,
+    )
     def is_spam_or_ad(self, text: str) -> bool:
         """
         Проверить, является ли текст спамом или рекламой
@@ -306,14 +407,26 @@ class GeminiClient:
 Ответь ТОЛЬКО одним словом: "ДА" (если это реклама/спам) или "НЕТ" (если это полезная информация про AI)."""
 
         try:
+            start_time = time.time()
             response = self.model.generate_content(prompt)
             answer = response.text.strip().upper()
+            duration = time.time() - start_time
+
+            # Детальное логирование
+            self._log_api_call("is_spam_or_ad", prompt, answer, duration)
+
             return "ДА" in answer
 
         except Exception as e:
             logger.error(f"Ошибка проверки на спам: {e}")
             return False
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((Exception,)),
+        reraise=True,
+    )
     def select_and_format_marketplace_news(
         self,
         messages: List[Dict],
@@ -392,10 +505,13 @@ class GeminiClient:
 Верни ТОЛЬКО JSON, без дополнительного текста."""
 
         try:
+            start_time = time.time()
             response = self.model.generate_content(prompt)
             result_text = response.text.strip()
+            duration = time.time() - start_time
 
-            logger.debug(f"Ответ Gemini (маркетплейс {marketplace}): {result_text[:500]}")
+            # Детальное логирование
+            self._log_api_call(f"select_marketplace_news[{marketplace}]", prompt, result_text, duration)
 
             # Удаляем markdown разметку если есть
             if result_text.startswith("```"):
@@ -414,6 +530,12 @@ class GeminiClient:
                     return []
 
             selected = json.loads(result_text)
+            try:
+                validated_items = [NewsItem(**item) for item in selected]
+                selected = [item.model_dump() for item in validated_items]
+            except ValidationError as e:
+                logger.error(f"Ошибка валидации JSON от Gemini ({marketplace}): {e}")
+                return []
 
             # Добавляем дополнительные поля
             messages_dict = {msg['id']: msg for msg in messages}
@@ -438,6 +560,12 @@ class GeminiClient:
             logger.error(f"Ошибка при отборе новостей для {marketplace}: {e}")
             return []
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((Exception,)),
+        reraise=True,
+    )
     def select_three_categories(
         self,
         messages: List[Dict],
@@ -552,10 +680,13 @@ class GeminiClient:
 Верни ТОЛЬКО JSON, без дополнительного текста."""
 
         try:
+            start_time = time.time()
             response = self.model.generate_content(prompt)
             result_text = response.text.strip()
+            duration = time.time() - start_time
 
-            logger.debug(f"Ответ Gemini (3 категории): {result_text[:500]}")
+            # Детальное логирование
+            self._log_api_call("select_three_categories", prompt, result_text, duration)
 
             # Удаляем markdown разметку
             if result_text.startswith("```"):
@@ -574,6 +705,12 @@ class GeminiClient:
                     return {'wildberries': [], 'ozon': [], 'general': []}
 
             categories = json.loads(result_text)
+            try:
+                validated_categories = CategoryNews(**categories)
+                categories = validated_categories.model_dump()
+            except ValidationError as e:
+                logger.error(f"Ошибка валидации JSON от Gemini (3 категории): {e}")
+                return {'wildberries': [], 'ozon': [], 'general': []}
 
             # Добавляем дополнительные поля к каждой новости
             messages_dict = {msg['id']: msg for msg in messages}
