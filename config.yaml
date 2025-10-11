@@ -1,0 +1,76 @@
+# Конфигурация Marketplace News Bot
+
+telegram:
+  session_name: "./data/marketplace_bot_session"
+  # Каналы будут загружены автоматически из подписок аккаунта
+  # ВАЖНО: использовать отдельный аккаунт (не тот же что для AI News Bot)
+
+gemini:
+  model: "gemini-2.0-flash-exp"
+  max_tokens: 2048
+  temperature: 0.7
+
+database:
+  path: "./data/marketplace_news.db"
+
+listener:
+  reconnect_timeout: 30  # секунд до переподключения
+  save_batch_size: 1     # сохранять сразу
+  min_message_length: 50 # минимальная длина сообщения
+
+processor:
+  schedule_time: "09:00"
+  timezone: "Europe/Moscow"
+  duplicate_threshold: 0.85  # порог схожести для дубликатов
+
+# Два независимых канала для публикации
+channels:
+  ozon:
+    enabled: true
+    top_n: 10  # сколько новостей отбирать про Ozon
+    target_channel: "@rnpozwb"  # Канал для публикации
+    keywords:
+      - "ozon"
+      - "озон"
+      - "ozon seller"
+    exclude_keywords:
+      - "реклама"
+      - "курс"
+      - "промокод"
+      - "обучение платное"
+
+  wildberries:
+    enabled: true
+    top_n: 10  # сколько новостей отбирать про Wildberries
+    target_channel: "@rnpozwb"  # Канал для публикации
+    keywords:
+      - "wildberries"
+      - "вайлдберриз"
+      - "вб"
+      - "wb"
+      - "wildberries seller"
+    exclude_keywords:
+      - "реклама"
+      - "курс"
+      - "промокод"
+      - "обучение платное"
+
+moderation:
+  enabled: true
+  timeout_hours: 2  # таймаут ожидания модерации
+
+cleanup:
+  raw_messages_days: 14   # хранить сырые сообщения 14 дней
+  published_days: 60      # хранить опубликованное 60 дней
+  run_weekly: true        # запускать раз в неделю
+
+status:
+  enabled: true           # включить отправку статуса
+  chat: "Soft Status"     # название группы для статуса
+  bot_name: "Marketplace News Bot" # имя бота в сообщениях
+  interval_minutes: 60    # интервал отправки в минутах (60 = каждый час)
+
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "./logs/bot.log"

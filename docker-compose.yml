@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  # Listener - слушает каналы 24/7
+  marketplace-listener:
+    build: .
+    container_name: marketplace-listener
+    command: python main.py listener
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config.yaml:/app/config.yaml
+      - ./.env:/app/.env
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Moscow
+    networks:
+      - marketplace-bot
+
+  # Processor - обрабатывает новости (запускается по крону или вручную)
+  # Закомментирован по умолчанию, запускается через docker-compose run
+  # marketplace-processor:
+  #   build: .
+  #   container_name: marketplace-processor
+  #   command: python main.py processor
+  #   volumes:
+  #     - ./data:/app/data
+  #     - ./logs:/app/logs
+  #     - ./config.yaml:/app/config.yaml
+  #     - ./.env:/app/.env
+  #   environment:
+  #     - TZ=Europe/Moscow
+  #   networks:
+  #     - marketplace-bot
+
+networks:
+  marketplace-bot:
+    driver: bridge

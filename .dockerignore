@@ -1,0 +1,43 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist
+build
+
+# IDEs
+.vscode
+.idea
+*.swp
+*.swo
+
+# Data files (будут монтироваться через volumes)
+data/*.db
+data/*.json
+logs/*.log
+
+# Session files (будут созданы в контейнере)
+*.session
+*.session-journal
+
+# Environment
+.env
+.env.local
+
+# Documentation
+*.md
+docs/
+
+# Tests
+tests/
+test_*.py
+*_test.py

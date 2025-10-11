@@ -1,0 +1,25 @@
+# Telegram
+telethon==1.36.0
+cryptg==0.4.0
+
+# Google Gemini AI
+google-generativeai==0.8.3
+
+# Embeddings и ML
+sentence-transformers==3.3.1
+torch==2.5.1
+
+# База данных
+# sqlite3 встроен в Python
+
+# Утилиты
+pyyaml==6.0.2
+python-dateutil==2.9.0.post0
+pytz==2024.2
+schedule==1.2.2
+
+# Логирование
+colorlog==6.9.0
+
+# Environment variables
+python-dotenv==1.0.0
