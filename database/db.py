@@ -267,6 +267,41 @@ class Database:
 
         return results
 
+    def check_duplicate(self, embedding: np.ndarray, threshold: float = 0.85) -> bool:
+        """
+        Проверить является ли текст дубликатом опубликованного
+
+        Args:
+            embedding: Embedding текста для проверки
+            threshold: Порог схожести (0.0 - 1.0)
+
+        Returns:
+            True если найден дубликат
+        """
+        published_embeddings = self.get_published_embeddings(days=60)
+
+        if not published_embeddings:
+            return False
+
+        embedding_norm = np.linalg.norm(embedding)
+        if embedding_norm == 0:
+            logger.warning("Получен embedding с нулевой нормой при проверке дубликатов")
+            return False
+
+        for post_id, published_embedding in published_embeddings:
+            published_norm = np.linalg.norm(published_embedding)
+            if published_norm == 0:
+                logger.debug(f"Пропущен опубликованный пост {post_id} из-за нулевой нормы embedding")
+                continue
+
+            similarity = np.dot(embedding, published_embedding) / (embedding_norm * published_norm)
+
+            if similarity >= threshold:
+                logger.debug(f"Найден дубликат: post_id={post_id}, similarity={similarity:.3f}")
+                return True
+
+        return False
+
     # ====== ОЧИСТКА ======
 
     def cleanup_old_data(self, raw_days: int = 14, published_days: int = 60):
