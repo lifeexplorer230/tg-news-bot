@@ -44,6 +44,12 @@ class MarketplaceProcessor:
             }
         }
 
+        self.all_digest_enabled = config.get('channels.all_digest.enabled', True)
+        self.all_digest_channel = config.get(
+            'channels.all_digest.target_channel',
+            self.marketplaces['ozon']['target_channel']
+        )
+
         self.duplicate_threshold = config.get('processor.duplicate_threshold', 0.85)
         self.moderation_enabled = config.get('moderation.enabled', True)
 
@@ -310,8 +316,11 @@ class MarketplaceProcessor:
             self.db.mark_as_processed(post['source_message_id'], gemini_score=post.get('score'))
 
         # ШАГ 6: Публикация в канал
-        # Используем target_channel из конфига (они оба ведут на @rnpozwb)
-        target_channel = self.marketplaces['ozon']['target_channel']
+        target_channel = (
+            self.all_digest_channel
+            if self.all_digest_enabled and self.all_digest_channel
+            else self.marketplaces['ozon']['target_channel']
+        )
         await self.publish_digest(client, approved_posts, "Маркетплейсы", target_channel)
 
         logger.info(f"✅ Обработка всех категорий завершена!")

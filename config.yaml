@@ -55,6 +55,11 @@ channels:
       - "промокод"
       - "обучение платное"
 
+  # Канал для общего дайджеста (3 категории)
+  all_digest:
+    enabled: true
+    target_channel: "@rnpozwb"  # Канал для публикации общего дайджеста
+
 moderation:
   enabled: true
   timeout_hours: 2  # таймаут ожидания модерации
