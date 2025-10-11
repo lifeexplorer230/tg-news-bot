@@ -100,6 +100,11 @@ class MarketplaceProcessor:
         )
 
         if not formatted_posts:
+            for msg in unique_messages:
+                self.db.mark_as_processed(
+                    msg['id'],
+                    rejection_reason='rejected_by_llm'
+                )
             logger.warning(f"Gemini не отобрал ни одной новости для {marketplace}")
             return
 
@@ -107,6 +112,14 @@ class MarketplaceProcessor:
 
         # Сортируем от самой важной к менее важной
         formatted_posts = sorted(formatted_posts, key=lambda x: x.get('score', 0), reverse=True)
+
+        formatted_ids = {post['source_message_id'] for post in formatted_posts}
+        for msg in unique_messages:
+            if msg['id'] not in formatted_ids:
+                self.db.mark_as_processed(
+                    msg['id'],
+                    rejection_reason='rejected_by_llm'
+                )
 
         # Помечаем сообщения как обработанные
         for post in formatted_posts:
@@ -147,6 +160,23 @@ class MarketplaceProcessor:
             if any(keyword.lower() in text_lower for keyword in keywords):
                 filtered.append(msg)
 
+        filtered_ids = {msg['id'] for msg in filtered}
+        for msg in messages:
+            if msg['id'] in filtered_ids:
+                continue
+
+            text_lower = msg['text'].lower()
+            if any(exclude.lower() in text_lower for exclude in exclude_keywords):
+                self.db.mark_as_processed(
+                    msg['id'],
+                    rejection_reason='rejected_by_exclude_keywords'
+                )
+            elif keywords and not any(keyword.lower() in text_lower for keyword in keywords):
+                self.db.mark_as_processed(
+                    msg['id'],
+                    rejection_reason='rejected_by_keywords_mismatch'
+                )
+
         return filtered
 
     async def filter_duplicates(self, messages: List[Dict]) -> List[Dict]:
@@ -160,8 +190,15 @@ class MarketplaceProcessor:
             # Проверяем на дубликаты
             is_duplicate = self.db.check_duplicate(embedding, self.duplicate_threshold)
 
-            if not is_duplicate:
-                unique.append(msg)
+            if is_duplicate:
+                self.db.mark_as_processed(
+                    msg['id'],
+                    is_duplicate=True,
+                    rejection_reason='is_duplicate'
+                )
+                continue
+
+            unique.append(msg)
 
         return unique
 
