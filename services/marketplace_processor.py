@@ -505,9 +505,11 @@ class MarketplaceProcessor:
                            Если False - использует старую систему (отдельно Ozon и WB)
         """
 
-        # Подключаемся к Telegram
+        # Подключаемся к Telegram с отдельной сессией для processor
+        # Это предотвращает конфликты с listener который использует основную сессию
+        processor_session = self.config.get('telegram.session_name') + '_processor'
         client = TelegramClient(
-            self.config.get('telegram.session_name'),
+            processor_session,
             self.config.telegram_api_id,
             self.config.telegram_api_hash
         )
