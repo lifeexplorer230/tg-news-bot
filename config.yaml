@@ -23,6 +23,12 @@ processor:
   timezone: "Europe/Moscow"
   duplicate_threshold: 0.85  # порог схожести для дубликатов
 
+embeddings:
+  model: "paraphrase-multilingual-MiniLM-L12-v2"
+  local_path: "./models/paraphrase-multilingual-MiniLM-L12-v2"
+  enable_fallback: true
+  allow_remote_download: false
+
 # Два независимых канала для публикации
 channels:
   ozon:
@@ -74,6 +80,9 @@ status:
   chat: "Soft Status"     # название группы для статуса
   bot_name: "Marketplace News Bot" # имя бота в сообщениях
   interval_minutes: 60    # интервал отправки в минутах (60 = каждый час)
+  bot_token: ""           # Bot API token для отправки статусов (рекомендуется для избежания конфликтов сессий)
+                          # Если не указан, использует User API (может конфликтовать с listener)
+  timezone: "Europe/Moscow"  # Timezone для статусов (по умолчанию из processor.timezone)
 
 logging:
   level: "INFO"  # DEBUG, INFO, WARNING, ERROR
