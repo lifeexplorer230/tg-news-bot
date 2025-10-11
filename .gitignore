@@ -40,8 +40,14 @@ env/
 data/*.db
 data/*.db-journal
 
-# Logs
+# Logs (exclude .gitkeep)
 logs/*.log
+logs/*
+!logs/.gitkeep
+
+# Snapshot files (exclude .gitkeep)
+snapshot/*
+!snapshot/.gitkeep
 
 # Environment variables
 .env
