@@ -4,9 +4,10 @@ import tempfile
 import os
 from datetime import datetime, timedelta
 import numpy as np
+import pytz
 
 from database.db import Database
-from utils.timezone import now_msk
+from utils.timezone import now_msk, get_timezone
 
 
 @pytest.fixture
@@ -80,6 +81,34 @@ class TestChannelOperations:
         count = cursor.fetchone()[0]
 
         assert count == 1  # Только один канал с таким именем
+
+    def test_get_channel_id(self, temp_db):
+        """Проверить получение ID канала по username"""
+        # Добавляем канал
+        expected_id = temp_db.add_channel('test_channel', 'Test Channel')
+
+        # Получаем ID по username
+        channel_id = temp_db.get_channel_id('test_channel')
+        assert channel_id == expected_id
+
+        # С @ символом
+        channel_id_with_at = temp_db.get_channel_id('@test_channel')
+        assert channel_id_with_at == expected_id
+
+        # Несуществующий канал
+        non_existent = temp_db.get_channel_id('nonexistent')
+        assert non_existent is None
+
+    def test_get_active_channels(self, temp_db):
+        """Проверить получение активных каналов"""
+        # Добавляем несколько каналов
+        temp_db.add_channel('channel1', 'Channel 1')
+        temp_db.add_channel('channel2', 'Channel 2')
+
+        active = temp_db.get_active_channels()
+
+        assert len(active) == 2
+        assert all(ch['is_active'] == 1 for ch in active)
 
 
 class TestMessageOperations:
@@ -211,6 +240,31 @@ class TestMessageOperations:
 
         assert reason == 'rejected_by_keywords'
 
+    def test_timezone_handling_naive_datetime(self, temp_db):
+        """Проверить обработку naive datetime (без timezone)"""
+        channel_id = temp_db.add_channel('test_channel', 'Test Channel')
+
+        # Создаём naive datetime (без timezone)
+        naive_dt = datetime(2025, 10, 11, 12, 0, 0)
+
+        msg_id = temp_db.save_message(
+            channel_id=channel_id,
+            message_id=1,
+            text='Test message',
+            date=naive_dt
+        )
+
+        # Проверяем что сохранилось корректно
+        assert msg_id is not None
+
+        # Проверяем что дата сконвертирована в UTC
+        cursor = temp_db.conn.cursor()
+        cursor.execute('SELECT date FROM raw_messages WHERE id = ?', (msg_id,))
+        stored_date = cursor.fetchone()[0]
+
+        # stored_date должна быть строкой UTC
+        assert isinstance(stored_date, str)
+
 
 class TestPublishedOperations:
     """Тесты операций с опубликованными постами"""
@@ -327,6 +381,39 @@ class TestStatsAndCleanup:
         assert stats['processed_today'] == 1
         assert stats['unprocessed'] == 2
         assert stats['active_channels'] == 1
+
+    def test_get_stats(self, temp_db):
+        """Проверить получение общей статистики"""
+        channel_id = temp_db.add_channel('test_channel', 'Test Channel')
+
+        # Добавляем сообщения
+        for i in range(5):
+            temp_db.save_message(
+                channel_id=channel_id,
+                message_id=i,
+                text=f'Message {i}',
+                date=now_msk()
+            )
+
+        # Обрабатываем 2 сообщения
+        temp_db.mark_as_processed(1)
+        temp_db.mark_as_processed(2)
+
+        # Публикуем 1 пост
+        embedding = np.random.rand(384).astype(np.float32)
+        temp_db.save_published(
+            text='Published',
+            embedding=embedding,
+            source_message_id=1,
+            source_channel_id=channel_id
+        )
+
+        stats = temp_db.get_stats()
+
+        assert stats['active_channels'] == 1
+        assert stats['unprocessed_messages'] == 3
+        assert stats['total_messages'] == 5
+        assert stats['total_published'] == 1
 
     def test_cleanup_old_data(self, temp_db):
         """Проверить очистку старых данных"""
