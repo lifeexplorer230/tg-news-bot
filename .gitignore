@@ -65,6 +65,6 @@ Thumbs.db
 moderation_data*.json
 processed_news.json
 
-# Test files
-test_*.py
-check_*.py
+# Test files (только в корне, не в tests/)
+/test_*.py
+/check_*.py
