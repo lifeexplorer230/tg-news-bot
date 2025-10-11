@@ -65,7 +65,7 @@ cleanup:
   run_weekly: true        # запускать раз в неделю
 
 status:
-  enabled: true           # включить отправку статуса
+  enabled: false          # отключить встроенный scheduler (используем внешний cron)
   chat: "Soft Status"     # название группы для статуса
   bot_name: "Marketplace News Bot" # имя бота в сообщениях
   interval_minutes: 60    # интервал отправки в минутах (60 = каждый час)

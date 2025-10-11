@@ -31,7 +31,7 @@ class StatusReporter:
 
             # Формируем сообщение
             now = datetime.now()
-            time_str = now.strftime("%H:%M")
+            time_str = now.strftime("%H:%M:%S")
             date_str = now.strftime("%d.%m.%Y")
 
             message = f"🤖 **{self.bot_name} - Статус на {time_str}**\n\n"
@@ -45,9 +45,11 @@ class StatusReporter:
             message += f"   🔗 Активных каналов: {stats['active_channels']}\n\n"
             message += f"✅ Бот работает нормально"
 
-            # Подключаемся к Telegram
+            # Подключаемся к Telegram с отдельной сессией для статуса
+            # Это предотвращает "database is locked" когда listener активен
+            status_session = self.config.get('telegram.session_name') + '_status'
             client = TelegramClient(
-                self.config.get('telegram.session_name'),
+                status_session,
                 self.config.telegram_api_id,
                 self.config.telegram_api_hash
             )

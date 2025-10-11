@@ -37,7 +37,8 @@ logs/*.log
 *.md
 docs/
 
-# Tests
+# Tests (except test_status.py needed for cron)
 tests/
 test_*.py
+!test_status.py
 *_test.py
