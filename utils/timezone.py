@@ -70,3 +70,29 @@ def format_msk(dt: datetime) -> str:
     """
     msk_dt = to_msk(dt)
     return msk_dt.strftime("%Y-%m-%d %H:%M:%S MSK")
+
+
+def get_timezone(tz_name: str):
+    """
+    Получить timezone объект по имени
+
+    Args:
+        tz_name: Имя timezone (например, 'Europe/Moscow')
+
+    Returns:
+        pytz.timezone объект
+    """
+    return pytz.timezone(tz_name)
+
+
+def now_in_timezone(tz):
+    """
+    Получить текущее время в указанной timezone
+
+    Args:
+        tz: pytz.timezone объект
+
+    Returns:
+        datetime с указанной timezone
+    """
+    return datetime.now(tz)
