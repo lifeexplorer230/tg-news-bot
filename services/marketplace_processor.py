@@ -1,4 +1,5 @@
 """Обработчик новостей маркетплейсов с поддержкой Ozon и Wildberries"""
+
 from datetime import timedelta
 
 from telethon import TelegramClient

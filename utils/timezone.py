@@ -1,4 +1,5 @@
 """Утилиты для работы с временными зонами"""
+
 from datetime import UTC, datetime
 
 import pytz

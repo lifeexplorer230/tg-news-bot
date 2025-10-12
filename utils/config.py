@@ -1,4 +1,5 @@
 """Загрузка конфигурации из YAML и .env"""
+
 import os
 from typing import Any
 
