@@ -1,4 +1,5 @@
 """Клиент для работы с Google Gemini API"""
+
 from __future__ import annotations
 
 import json
@@ -407,9 +408,9 @@ class GeminiClient:
                 msg_id = item["id"]
                 if msg_id in messages_dict:
                     msg = messages_dict[msg_id]
-                    item[
-                        "source_link"
-                    ] = f"https://t.me/{msg['channel_username']}/{msg.get('message_id', '')}"
+                    item["source_link"] = (
+                        f"https://t.me/{msg['channel_username']}/{msg.get('message_id', '')}"
+                    )
                     item["source_message_id"] = msg_id
                     item["source_channel_id"] = msg["channel_id"]
                     item["text"] = msg["text"]  # Для embeddings
@@ -591,9 +592,9 @@ class GeminiClient:
                 msg_id = item["id"]
                 if msg_id in messages_dict:
                     msg = messages_dict[msg_id]
-                    item[
-                        "source_link"
-                    ] = f"https://t.me/{msg['channel_username']}/{msg.get('message_id', '')}"
+                    item["source_link"] = (
+                        f"https://t.me/{msg['channel_username']}/{msg.get('message_id', '')}"
+                    )
                     item["source_message_id"] = msg_id
                     item["source_channel_id"] = msg["channel_id"]
                     item["text"] = msg["text"]
@@ -731,9 +732,9 @@ class GeminiClient:
                     msg_id = item["id"]
                     if msg_id in messages_dict:
                         msg = messages_dict[msg_id]
-                        item[
-                            "source_link"
-                        ] = f"https://t.me/{msg['channel_username']}/{msg.get('message_id', '')}"
+                        item["source_link"] = (
+                            f"https://t.me/{msg['channel_username']}/{msg.get('message_id', '')}"
+                        )
                         item["source_message_id"] = msg_id
                         item["source_channel_id"] = msg["channel_id"]
                         item["text"] = msg["text"]

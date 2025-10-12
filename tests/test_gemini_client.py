@@ -1,4 +1,5 @@
 """Тесты для services/gemini_client.py"""
+
 import json
 
 import pytest

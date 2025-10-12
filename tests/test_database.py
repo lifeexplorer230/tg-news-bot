@@ -1,4 +1,5 @@
 """Тесты для database/db.py"""
+
 import os
 import tempfile
 from datetime import UTC, datetime, timedelta

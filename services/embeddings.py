@@ -1,4 +1,5 @@
 """Работа с embeddings для проверки дубликатов"""
+
 import threading
 from collections.abc import Iterable
 from pathlib import Path

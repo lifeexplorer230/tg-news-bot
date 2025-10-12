@@ -1,4 +1,5 @@
 """Работа с базой данных SQLite"""
+
 from __future__ import annotations
 
 import pickle  # nosec B403

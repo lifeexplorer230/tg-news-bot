@@ -1,4 +1,5 @@
 """Постоянный мониторинг Telegram каналов"""
+
 import asyncio
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
