@@ -1,0 +1,99 @@
+# Pre-commit hooks configuration
+# Install: pip install pre-commit
+# Setup: pre-commit install
+# Run manually: pre-commit run --all-files
+
+repos:
+  # Ruff - Fast Python linter
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.1.9
+  hooks:
+  - id: ruff
+    args: [--fix, --exit-non-zero-on-fix]
+    types_or: [python, pyi]
+
+  # Black - Code formatter
+- repo: https://github.com/psf/black
+  rev: 23.12.1
+  hooks:
+  - id: black
+    language_version: python3
+    types: [python]
+
+  # isort - Import sorting (integrated in ruff, but keeping as backup)
+- repo: https://github.com/PyCQA/isort
+  rev: 5.13.2
+  hooks:
+  - id: isort
+    args: [--profile, black, --line-length, '100']
+
+  # Standard pre-commit hooks
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v4.5.0
+  hooks:
+  - id: trailing-whitespace
+    exclude: ^(.*\.md|.*\.txt)$
+  - id: end-of-file-fixer
+    exclude: ^(data/|logs/|snapshot/)
+  - id: check-yaml
+    args: [--allow-multiple-documents]
+  - id: check-json
+  - id: check-toml
+  - id: check-added-large-files
+    args: [--maxkb=1000]
+  - id: check-merge-conflict
+  - id: debug-statements
+  - id: mixed-line-ending
+    args: [--fix=lf]
+
+  # Security checks
+- repo: https://github.com/PyCQA/bandit
+  rev: 1.7.6
+  hooks:
+  - id: bandit
+    args: [-c, pyproject.toml]
+    additional_dependencies: ['bandit[toml]']
+    exclude: ^tests/
+
+  # Markdown linting
+- repo: https://github.com/igorshubovych/markdownlint-cli
+  rev: v0.38.0
+  hooks:
+  - id: markdownlint
+    args: [--fix, --disable, 'MD013,MD036,MD040']
+    exclude: ^(ROADMAP_ANALYSIS\.md|INSTRUKTSIYA_VYPOLNENIYA\.md)$
+
+  # YAML formatting
+- repo: https://github.com/macisamuele/language-formatters-pre-commit-hooks
+  rev: v2.12.0
+  hooks:
+  - id: pretty-format-yaml
+    args: [--autofix, --indent, '2']
+    exclude: ^\.github/
+
+  # Secrets detection
+- repo: https://github.com/Yelp/detect-secrets
+  rev: v1.5.0
+  hooks:
+  - id: detect-secrets
+    args: [--baseline, .secrets.baseline]
+    exclude: package.lock.json
+
+# Exclude patterns for all hooks
+exclude: |
+  (?x)^(
+    \.git/|
+    \.pytest_cache/|
+    __pycache__/|
+    \.venv/|
+    venv/|
+    data/|
+    logs/|
+    htmlcov/|
+    \.coverage|
+    snapshot/|
+    .*\.egg-info/|
+    build/|
+    dist/|
+    .*\.session.*
+  )

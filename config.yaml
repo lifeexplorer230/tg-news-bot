@@ -1,70 +1,90 @@
 # Конфигурация Marketplace News Bot
 
 telegram:
-  session_name: "./data/marketplace_bot_session"
+  session_name: ./data/marketplace_bot_session
   # Каналы будут загружены автоматически из подписок аккаунта
   # ВАЖНО: использовать отдельный аккаунт (не тот же что для AI News Bot)
 
 gemini:
-  model: "gemini-2.0-flash-exp"
+  model: gemini-2.0-flash-exp
   max_tokens: 2048
   temperature: 0.7
 
 database:
-  path: "./data/marketplace_news.db"
+  path: ./data/marketplace_news.db
 
 listener:
   reconnect_timeout: 30  # секунд до переподключения
   save_batch_size: 1     # сохранять сразу
   min_message_length: 50 # минимальная длина сообщения
+  channel_whitelist: []  # список юзернеймов каналов, которые нужно слушать (если пусто — все)
+  channel_blacklist: []  # список юзернеймов каналов, которые нужно исключить
+  healthcheck:
+    heartbeat_path: ./logs/listener.heartbeat    # файл для проверки здоровья контейнера
+    interval_seconds: 60                         # как часто обновлять heartbeat
+    max_age_seconds: 180                         # через сколько секунд healthcheck считает сервис упавшим
 
 processor:
-  schedule_time: "09:00"
-  timezone: "Europe/Moscow"
+  schedule_time: 09:00
+  timezone: Europe/Moscow
   duplicate_threshold: 0.85  # порог схожести для дубликатов
 
 embeddings:
-  model: "paraphrase-multilingual-MiniLM-L12-v2"
-  local_path: "./models/paraphrase-multilingual-MiniLM-L12-v2"
+  model: paraphrase-multilingual-MiniLM-L12-v2
+  local_path: ./models/paraphrase-multilingual-MiniLM-L12-v2
   enable_fallback: true
   allow_remote_download: false
 
-# Два независимых канала для публикации
+filters:
+  exclude_keywords:
+  - реклама
+  - курс
+  - промокод
+  - обучение платное
+
+# Настройки маркетплейсов (добавляйте новые без изменения кода)
+marketplaces:
+- name: ozon
+  display_name: Ozon
+  enabled: true
+  top_n: 10
+  target_channel: '@rnpozwb'
+  keywords:
+  - ozon
+  - озон
+  - ozon seller
+  exclude_keywords:
+  - реклама
+  - курс
+  - промокод
+  - обучение платное
+
+- name: wildberries
+  display_name: Wildberries
+  enabled: true
+  top_n: 10
+  target_channel: '@rnpozwb'
+  keywords:
+  - wildberries
+  - вайлдберриз
+  - вб
+  - wb
+  - wildberries seller
+  exclude_keywords:
+  - реклама
+  - курс
+  - промокод
+  - обучение платное
+
+# Канал для общего дайджеста (3 категории)
 channels:
-  ozon:
-    enabled: true
-    top_n: 10  # сколько новостей отбирать про Ozon
-    target_channel: "@rnpozwb"  # Канал для публикации
-    keywords:
-      - "ozon"
-      - "озон"
-      - "ozon seller"
-    exclude_keywords:
-      - "реклама"
-      - "курс"
-      - "промокод"
-      - "обучение платное"
-
-  wildberries:
-    enabled: true
-    top_n: 10  # сколько новостей отбирать про Wildberries
-    target_channel: "@rnpozwb"  # Канал для публикации
-    keywords:
-      - "wildberries"
-      - "вайлдберриз"
-      - "вб"
-      - "wb"
-      - "wildberries seller"
-    exclude_keywords:
-      - "реклама"
-      - "курс"
-      - "промокод"
-      - "обучение платное"
-
-  # Канал для общего дайджеста (3 категории)
   all_digest:
     enabled: true
-    target_channel: "@rnpozwb"  # Канал для публикации общего дайджеста
+    target_channel: '@rnpozwb'  # Канал для публикации общего дайджеста
+    category_counts:
+      wildberries: 5
+      ozon: 5
+      general: 5
 
 moderation:
   enabled: true
@@ -77,14 +97,19 @@ cleanup:
 
 status:
   enabled: false          # отключить встроенный scheduler (используем внешний cron)
-  chat: "Soft Status"     # название группы для статуса
-  bot_name: "Marketplace News Bot" # имя бота в сообщениях
+  chat: Soft Status       # название группы для статуса
+  bot_name: Marketplace News Bot   # имя бота в сообщениях
   interval_minutes: 60    # интервал отправки в минутах (60 = каждый час)
-  bot_token: ""           # Bot API token для отправки статусов (рекомендуется для избежания конфликтов сессий)
+  bot_token: ''           # Bot API token для отправки статусов (рекомендуется для избежания конфликтов сессий)
                           # Если не указан, использует User API (может конфликтовать с listener)
-  timezone: "Europe/Moscow"  # Timezone для статусов (по умолчанию из processor.timezone)
+  timezone: Europe/Moscow    # Timezone для статусов (по умолчанию из processor.timezone)
 
 logging:
-  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  file: "./logs/bot.log"
+  level: INFO    # DEBUG, INFO, WARNING, ERROR
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  datefmt: '%Y-%m-%d %H:%M:%S'
+  file: ./logs/bot.log
+  rotate:
+    enabled: true
+    max_bytes: 10485760  # 10 MB
+    backup_count: 5      # хранить 5 файлов-историй

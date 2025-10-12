@@ -1,6 +1,6 @@
 # 🛒 Marketplace News Bot
 
-**Version 2.0.0** | ✅ Production Ready
+**Version 2.1.0** | ✅ Production Ready
 
 Автоматический агрегатор новостей про маркетплейсы Ozon и Wildberries из Telegram каналов.
 
@@ -37,6 +37,7 @@ nano .env
 ```
 
 Заполни переменные:
+
 ```env
 TELEGRAM_API_ID=your_api_id           # https://my.telegram.org/apps
 TELEGRAM_API_HASH=your_api_hash
@@ -56,12 +57,16 @@ WB_CHANNEL=@your_wb_channel
 Отредактируй `config.yaml`:
 
 ```yaml
-channels:
-  ozon:
+marketplaces:
+  - name: "ozon"
     target_channel: "@your_ozon_channel"  # Замени на свой
 
-  wildberries:
+  - name: "wildberries"
     target_channel: "@your_wb_channel"    # Замени на свой
+
+channels:
+  all_digest:
+    target_channel: "@your_digest_channel"  # Опционально: общий дайджест
 ```
 
 ### 3. Первый запуск (настройка Telegram)
@@ -147,6 +152,7 @@ docker-compose run --rm marketplace-processor python main.py processor
 ```
 
 **Что делает Processor:**
+
 1. Загружает сообщения за последние 24 часа
 2. Фильтрует по ключевым словам (Ozon / Wildberries)
 3. Проверяет на дубликаты через embeddings
@@ -158,23 +164,27 @@ docker-compose run --rm marketplace-processor python main.py processor
 
 ## 📊 Как работает отбор новостей
 
-### Критерии для Ozon и Wildberries:
+### Критерии для Ozon и Wildberries
 
 **ВЫСОКИЙ ПРИОРИТЕТ (9-10)**
+
 - Изменения в работе маркетплейса (комиссии, правила)
 - Официальные обновления
 - Важные новости для продавцов
 
 **СРЕДНИЙ ПРИОРИТЕТ (7-8)**
+
 - Кейсы успешных продавцов
 - Новые инструменты и сервисы
 - Тренды и аналитика
 
 **НИЗКИЙ ПРИОРИТЕТ (5-6)**
+
 - Общие советы
 - Статистика рынка
 
 **ИСКЛЮЧАЕТСЯ:**
+
 - Реклама курсов и консультаций
 - Мемы без пользы
 - Новости про ДРУГИЕ маркетплейсы
@@ -224,6 +234,7 @@ docker-compose run --rm marketplace-processor python main.py processor
 ### Проблема: Session already running
 
 **Решение:**
+
 ```bash
 # Останови listener
 docker-compose stop marketplace-listener
@@ -238,6 +249,7 @@ docker-compose up -d marketplace-listener
 ### Проблема: Database locked
 
 **Решение:**
+
 ```bash
 # Останови все контейнеры
 docker-compose down
@@ -252,8 +264,9 @@ docker-compose up -d marketplace-listener
 ### Проблема: Gemini API ошибка
 
 **Решение:**
+
 1. Проверь API key в `.env`
-2. Проверь квоту на https://makersuite.google.com/
+2. Проверь квоту на <https://makersuite.google.com/>
 3. Убедись что модель `gemini-2.0-flash-exp` доступна
 
 ---
@@ -300,6 +313,9 @@ sqlite3 data/marketplace_news.db "SELECT COUNT(*) FROM raw_messages"
 ### Полезные команды
 
 ```bash
+# Проверить статус контейнеров (должен быть healthy)
+docker-compose ps
+
 # Перезапуск listener
 docker-compose restart marketplace-listener
 
@@ -312,6 +328,30 @@ docker-compose down
 # Ребилд образа после изменений
 docker-compose build --no-cache
 ```
+
+### Ротация логов
+
+- Файл `logs/bot.log` автоматически ротируется Python-хендлером (5×10 MB).
+- Дополнительно можно запустить `logrotate` внутри контейнера:
+
+```bash
+docker exec marketplace-listener logrotate -f /app/docker/logrotate.conf
+```
+
+### Бэкапы базы
+
+- Снимок: `./scripts/backup_db.sh` (или `docker exec marketplace-listener /app/scripts/backup_db.sh`)
+- Восстановить: `./scripts/restore_db.sh <путь-к-бэкапу>`
+- Подробный план: `docs/backup_runbook.md`
+
+---
+
+## 🛠 Разработка
+
+- Установи dev-зависимости: `pip install -r requirements-dev.txt`
+- Активируй хуки: `pre-commit install`
+- Запускай проверку перед пушем: `pre-commit run --all-files`
+- Автоисправление: `make lint-fix`
 
 ---
 
@@ -331,6 +371,7 @@ docker-compose build --no-cache
 ## 🤝 Поддержка
 
 Если возникли вопросы - проверь:
+
 1. Логи: `docker-compose logs`
 2. Config: `config.yaml` правильно заполнен?
 3. .env: все ключи на месте?

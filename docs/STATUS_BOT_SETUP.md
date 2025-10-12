@@ -3,6 +3,7 @@
 ## Проблема конфликтов сессий
 
 StatusReporter и TelegramListener используют Telegram API для разных целей:
+
 - **Listener** - слушает каналы через User API (требует номер телефона)
 - **StatusReporter** - отправляет статусы в группу
 

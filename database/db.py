@@ -1,9 +1,11 @@
 """Работа с базой данных SQLite"""
+from __future__ import annotations
+
+import pickle  # nosec B403
 import sqlite3
-import pickle
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+
 import numpy as np
 
 from utils.logger import setup_logger
@@ -24,13 +26,13 @@ class Database:
         """
         self.db_path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self.conn = None
+        self.conn: sqlite3.Connection | None = None
         self.init_db()
 
     def connect(self):
         """Подключение к базе данных"""
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        self.conn.execute('PRAGMA journal_mode=WAL')
+        self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.row_factory = sqlite3.Row  # Для доступа по именам столбцов
         return self.conn
 
@@ -40,7 +42,8 @@ class Database:
         cursor = conn.cursor()
 
         # Таблица каналов
-        cursor.execute('''
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS channels (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT UNIQUE NOT NULL,
@@ -48,10 +51,12 @@ class Database:
                 is_active BOOLEAN DEFAULT 1,
                 added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        ''')
+        """
+        )
 
         # Таблица сырых сообщений
-        cursor.execute('''
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS raw_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 channel_id INTEGER NOT NULL,
@@ -66,27 +71,33 @@ class Database:
                 FOREIGN KEY (channel_id) REFERENCES channels(id),
                 UNIQUE(channel_id, message_id)
             )
-        ''')
+        """
+        )
 
         # Добавляем новое поле если его нет
         cursor.execute("PRAGMA table_info(raw_messages)")
         columns = [col[1] for col in cursor.fetchall()]
-        if 'rejection_reason' not in columns:
-            cursor.execute('ALTER TABLE raw_messages ADD COLUMN rejection_reason TEXT')
+        if "rejection_reason" not in columns:
+            cursor.execute("ALTER TABLE raw_messages ADD COLUMN rejection_reason TEXT")
             logger.info("Добавлено поле rejection_reason в raw_messages")
 
         # Индексы для raw_messages
-        cursor.execute('''
+        cursor.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_processed
             ON raw_messages(processed, date)
-        ''')
-        cursor.execute('''
+        """
+        )
+        cursor.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_date
             ON raw_messages(date)
-        ''')
+        """
+        )
 
         # Таблица опубликованных постов
-        cursor.execute('''
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS published (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 text TEXT NOT NULL,
@@ -96,20 +107,25 @@ class Database:
                 published_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (source_message_id) REFERENCES raw_messages(id)
             )
-        ''')
+        """
+        )
 
-        cursor.execute('''
+        cursor.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_published_date
             ON published(published_at)
-        ''')
+        """
+        )
 
         # Таблица конфигурации
-        cursor.execute('''
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS config (
                 key TEXT PRIMARY KEY,
                 value TEXT
             )
-        ''')
+        """
+        )
 
         conn.commit()
         logger.info(f"База данных инициализирована: {self.db_path}")
@@ -127,40 +143,40 @@ class Database:
         Returns:
             ID добавленного канала
         """
-        username = username.lstrip('@')
+        username = username.lstrip("@")
         cursor = self.conn.cursor()
 
         try:
             cursor.execute(
-                'INSERT INTO channels (username, title) VALUES (?, ?)',
-                (username, title)
+                "INSERT INTO channels (username, title) VALUES (?, ?)", (username, title)
             )
             self.conn.commit()
             logger.info(f"Добавлен канал: @{username}")
             return cursor.lastrowid
         except sqlite3.IntegrityError:
             # Канал уже существует
-            cursor.execute('SELECT id FROM channels WHERE username = ?', (username,))
+            cursor.execute("SELECT id FROM channels WHERE username = ?", (username,))
             return cursor.fetchone()[0]
 
-    def get_channel_id(self, username: str) -> Optional[int]:
+    def get_channel_id(self, username: str) -> int | None:
         """Получить ID канала по username"""
-        username = username.lstrip('@')
+        username = username.lstrip("@")
         cursor = self.conn.cursor()
-        cursor.execute('SELECT id FROM channels WHERE username = ?', (username,))
+        cursor.execute("SELECT id FROM channels WHERE username = ?", (username,))
         row = cursor.fetchone()
         return row[0] if row else None
 
-    def get_active_channels(self) -> List[Dict]:
+    def get_active_channels(self) -> list[dict]:
         """Получить список активных каналов"""
         cursor = self.conn.cursor()
-        cursor.execute('SELECT * FROM channels WHERE is_active = 1')
+        cursor.execute("SELECT * FROM channels WHERE is_active = 1")
         return [dict(row) for row in cursor.fetchall()]
 
     # ====== РАБОТА С СООБЩЕНИЯМИ ======
 
-    def save_message(self, channel_id: int, message_id: int, text: str,
-                    date: datetime, has_media: bool = False) -> Optional[int]:
+    def save_message(
+        self, channel_id: int, message_id: int, text: str, date: datetime, has_media: bool = False
+    ) -> int | None:
         """
         Сохранить сообщение из канала
 
@@ -177,18 +193,21 @@ class Database:
         cursor = self.conn.cursor()
 
         try:
-            cursor.execute('''
+            cursor.execute(
+                """
                 INSERT INTO raw_messages
                 (channel_id, message_id, text, date, has_media)
                 VALUES (?, ?, ?, ?, ?)
-            ''', (channel_id, message_id, text, date, has_media))
+            """,
+                (channel_id, message_id, text, date, has_media),
+            )
             self.conn.commit()
             return cursor.lastrowid
         except sqlite3.IntegrityError:
             # Сообщение уже существует
             return None
 
-    def get_unprocessed_messages(self, hours: int = 24) -> List[Dict]:
+    def get_unprocessed_messages(self, hours: int = 24) -> list[dict]:
         """
         Получить необработанные сообщения за последние N часов
 
@@ -201,20 +220,27 @@ class Database:
         cursor = self.conn.cursor()
         cutoff_time = now_msk() - timedelta(hours=hours)
 
-        cursor.execute('''
+        cursor.execute(
+            """
             SELECT m.*, c.username as channel_username
             FROM raw_messages m
             JOIN channels c ON m.channel_id = c.id
             WHERE m.processed = 0
               AND m.date > ?
             ORDER BY m.date DESC
-        ''', (cutoff_time,))
+        """,
+            (cutoff_time,),
+        )
 
         return [dict(row) for row in cursor.fetchall()]
 
-    def mark_as_processed(self, message_id: int, is_duplicate: bool = False,
-                         gemini_score: Optional[int] = None,
-                         rejection_reason: Optional[str] = None):
+    def mark_as_processed(
+        self,
+        message_id: int,
+        is_duplicate: bool = False,
+        gemini_score: int | None = None,
+        rejection_reason: str | None = None,
+    ):
         """
         Пометить сообщение как обработанное
 
@@ -225,20 +251,24 @@ class Database:
             rejection_reason: Причина отклонения (если не опубликовано)
         """
         cursor = self.conn.cursor()
-        cursor.execute('''
+        cursor.execute(
+            """
             UPDATE raw_messages
             SET processed = 1,
                 is_duplicate = ?,
                 gemini_score = ?,
                 rejection_reason = ?
             WHERE id = ?
-        ''', (is_duplicate, gemini_score, rejection_reason, message_id))
+        """,
+            (is_duplicate, gemini_score, rejection_reason, message_id),
+        )
         self.conn.commit()
 
     # ====== РАБОТА С ОПУБЛИКОВАННЫМИ ПОСТАМИ ======
 
-    def save_published(self, text: str, embedding: np.ndarray,
-                      source_message_id: int, source_channel_id: int) -> int:
+    def save_published(
+        self, text: str, embedding: np.ndarray, source_message_id: int, source_channel_id: int
+    ) -> int:
         """
         Сохранить опубликованный пост
 
@@ -255,15 +285,18 @@ class Database:
         # Сериализуем embedding в bytes
         embedding_bytes = pickle.dumps(embedding)
 
-        cursor.execute('''
+        cursor.execute(
+            """
             INSERT INTO published
             (text, embedding, source_message_id, source_channel_id)
             VALUES (?, ?, ?, ?)
-        ''', (text, embedding_bytes, source_message_id, source_channel_id))
+        """,
+            (text, embedding_bytes, source_message_id, source_channel_id),
+        )
         self.conn.commit()
         return cursor.lastrowid
 
-    def get_published_embeddings(self, days: int = 60) -> List[Tuple[int, np.ndarray]]:
+    def get_published_embeddings(self, days: int = 60) -> list[tuple[int, np.ndarray]]:
         """
         Получить embeddings опубликованных постов за последние N дней
 
@@ -276,14 +309,17 @@ class Database:
         cursor = self.conn.cursor()
         cutoff_time = now_msk() - timedelta(days=days)
 
-        cursor.execute('''
+        cursor.execute(
+            """
             SELECT id, embedding FROM published
             WHERE published_at > ? AND embedding IS NOT NULL
-        ''', (cutoff_time,))
+        """,
+            (cutoff_time,),
+        )
 
         results = []
         for row in cursor.fetchall():
-            embedding = pickle.loads(row[1])
+            embedding = pickle.loads(row[1])  # nosec B301
             results.append((row[0], embedding))
 
         return results
@@ -312,7 +348,9 @@ class Database:
         for post_id, published_embedding in published_embeddings:
             published_norm = np.linalg.norm(published_embedding)
             if published_norm == 0:
-                logger.debug(f"Пропущен опубликованный пост {post_id} из-за нулевой нормы embedding")
+                logger.debug(
+                    f"Пропущен опубликованный пост {post_id} из-за нулевой нормы embedding"
+                )
                 continue
 
             similarity = np.dot(embedding, published_embedding) / (embedding_norm * published_norm)
@@ -339,79 +377,89 @@ class Database:
         published_cutoff = now_msk() - timedelta(days=published_days)
 
         # Удаляем старые сырые сообщения
-        cursor.execute('DELETE FROM raw_messages WHERE date < ?', (raw_cutoff,))
+        cursor.execute("DELETE FROM raw_messages WHERE date < ?", (raw_cutoff,))
         raw_deleted = cursor.rowcount
 
         # Удаляем старые опубликованные посты
-        cursor.execute('DELETE FROM published WHERE published_at < ?', (published_cutoff,))
+        cursor.execute("DELETE FROM published WHERE published_at < ?", (published_cutoff,))
         published_deleted = cursor.rowcount
 
         # Коммитим транзакцию перед VACUUM
         self.conn.commit()
 
         # VACUUM для сжатия БД (должен быть вне транзакции)
-        cursor.execute('VACUUM')
-        logger.info(f"Очистка БД: удалено {raw_deleted} сырых сообщений, "
-                   f"{published_deleted} опубликованных постов")
+        cursor.execute("VACUUM")
+        logger.info(
+            f"Очистка БД: удалено {raw_deleted} сырых сообщений, "
+            f"{published_deleted} опубликованных постов"
+        )
 
-        return {'raw': raw_deleted, 'published': published_deleted}
+        return {"raw": raw_deleted, "published": published_deleted}
 
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict:
         """Получить статистику по базе"""
         cursor = self.conn.cursor()
 
         stats = {}
 
-        cursor.execute('SELECT COUNT(*) FROM channels WHERE is_active = 1')
-        stats['active_channels'] = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM channels WHERE is_active = 1")
+        stats["active_channels"] = cursor.fetchone()[0]
 
-        cursor.execute('SELECT COUNT(*) FROM raw_messages WHERE processed = 0')
-        stats['unprocessed_messages'] = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM raw_messages WHERE processed = 0")
+        stats["unprocessed_messages"] = cursor.fetchone()[0]
 
-        cursor.execute('SELECT COUNT(*) FROM raw_messages')
-        stats['total_messages'] = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM raw_messages")
+        stats["total_messages"] = cursor.fetchone()[0]
 
-        cursor.execute('SELECT COUNT(*) FROM published')
-        stats['total_published'] = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM published")
+        stats["total_published"] = cursor.fetchone()[0]
 
         return stats
 
-    def get_today_stats(self) -> Dict:
+    def get_today_stats(self) -> dict:
         """Получить статистику за сегодня"""
         cursor = self.conn.cursor()
         stats = {}
 
         # Сообщения, собранные сегодня
-        cursor.execute('''
+        cursor.execute(
+            """
             SELECT COUNT(*) FROM raw_messages
             WHERE date(date) = date('now')
-        ''')
-        stats['messages_today'] = cursor.fetchone()[0]
+        """
+        )
+        stats["messages_today"] = cursor.fetchone()[0]
 
         # Обработанные сегодня (created_at - когда добавлено в БД, дата обработки)
-        cursor.execute('''
+        cursor.execute(
+            """
             SELECT COUNT(*) FROM raw_messages
             WHERE date(created_at) = date('now') AND processed = 1
-        ''')
-        stats['processed_today'] = cursor.fetchone()[0]
+        """
+        )
+        stats["processed_today"] = cursor.fetchone()[0]
 
         # Необработанные
-        cursor.execute('''
+        cursor.execute(
+            """
             SELECT COUNT(*) FROM raw_messages
             WHERE processed = 0
-        ''')
-        stats['unprocessed'] = cursor.fetchone()[0]
+        """
+        )
+        stats["unprocessed"] = cursor.fetchone()[0]
 
         # Опубликованные сегодня
-        cursor.execute('''
+        cursor.execute(
+            """
             SELECT COUNT(*) FROM published
             WHERE date(published_at) = date('now')
-        ''')
-        stats['published_today'] = cursor.fetchone()[0]
+        """
+        )
+        stats["published_today"] = cursor.fetchone()[0]
 
         # Активные каналы
-        cursor.execute('SELECT COUNT(*) FROM channels WHERE is_active = 1')
-        stats['active_channels'] = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM channels WHERE is_active = 1")
+        stats["active_channels"] = cursor.fetchone()[0]
 
         return stats
 

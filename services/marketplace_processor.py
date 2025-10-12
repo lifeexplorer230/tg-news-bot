@@ -1,15 +1,14 @@
 """Обработчик новостей маркетплейсов с поддержкой Ozon и Wildberries"""
-import asyncio
-import re
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from datetime import timedelta
+
 from telethon import TelegramClient
 
 from database.db import Database
+from models.marketplace import Marketplace
 from services.embeddings import EmbeddingService
 from services.gemini_client import GeminiClient
-from utils.logger import get_logger
 from utils.config import Config
+from utils.logger import get_logger
 from utils.timezone import now_msk
 
 logger = get_logger(__name__)
@@ -21,38 +20,94 @@ class MarketplaceProcessor:
     def __init__(self, config: Config):
         self.config = config
         self.db = Database(config.db_path)
-        self.embeddings = EmbeddingService()
-        self.gemini = GeminiClient(
-            api_key=config.gemini_api_key,
-            model_name=config.get('gemini.model')
+        self._embedding_service: EmbeddingService | None = None
+        self._gemini_client: GeminiClient | None = None
+        self._embedding_model_name = config.get(
+            "embeddings.model", "paraphrase-multilingual-MiniLM-L12-v2"
+        )
+        self._embedding_local_path = config.get("embeddings.local_path")
+        self._embedding_allow_remote = config.get("embeddings.allow_remote_download", True)
+        self._embedding_enable_fallback = config.get("embeddings.enable_fallback", True)
+        self._gemini_model_name = config.get("gemini.model", "gemini-1.5-flash")
+
+        self.global_exclude_keywords = [
+            keyword.lower() for keyword in config.get("filters.exclude_keywords", []) if keyword
+        ]
+
+        raw_marketplaces = config.get("marketplaces", [])
+        if isinstance(raw_marketplaces, dict):
+            raw_marketplaces = [
+                {
+                    "name": name,
+                    **(raw_marketplaces[name] or {}),
+                }
+                for name in raw_marketplaces
+            ]
+
+        self.marketplaces: dict[str, Marketplace] = {}
+        for mp_cfg in raw_marketplaces:
+            if not isinstance(mp_cfg, dict):
+                continue
+            data = dict(mp_cfg)
+            data.setdefault("enabled", True)
+            try:
+                marketplace = Marketplace(**data)
+            except TypeError as exc:
+                logger.error(f"Некорректная конфигурация маркетплейса {mp_cfg}: {exc}")
+                continue
+            marketplace.combined_exclude_keywords_lower = list(
+                dict.fromkeys(marketplace.exclude_keywords_lower + self.global_exclude_keywords)
+            )
+            self.marketplaces[marketplace.name] = marketplace
+
+        if not self.marketplaces:
+            logger.warning("В конфигурации не найдено ни одного маркетплейса")
+
+        self.all_exclude_keywords_lower = set(self.global_exclude_keywords)
+        for marketplace in self.marketplaces.values():
+            self.all_exclude_keywords_lower.update(marketplace.combined_exclude_keywords_lower)
+
+        self.marketplace_names = list(self.marketplaces.keys())
+
+        default_channel = next(
+            (mp.target_channel for mp in self.marketplaces.values() if mp.target_channel),
+            None,
         )
 
-        # Настройки для каждого маркетплейса
-        self.marketplaces = {
-            'ozon': {
-                'enabled': config.get('channels.ozon.enabled', True),
-                'top_n': config.get('channels.ozon.top_n', 10),
-                'target_channel': config.get('channels.ozon.target_channel'),
-                'keywords': config.get('channels.ozon.keywords', []),
-                'exclude_keywords': config.get('channels.ozon.exclude_keywords', [])
-            },
-            'wildberries': {
-                'enabled': config.get('channels.wildberries.enabled', True),
-                'top_n': config.get('channels.wildberries.top_n', 10),
-                'target_channel': config.get('channels.wildberries.target_channel'),
-                'keywords': config.get('channels.wildberries.keywords', []),
-                'exclude_keywords': config.get('channels.wildberries.exclude_keywords', [])
-            }
+        self.all_digest_enabled = config.get("channels.all_digest.enabled", True)
+        self.all_digest_channel = config.get(
+            "channels.all_digest.target_channel",
+            default_channel,
+        )
+        counts_config = config.get("channels.all_digest.category_counts", {})
+        self.all_digest_counts = {
+            "wildberries": counts_config.get("wildberries", 5),
+            "ozon": counts_config.get("ozon", 5),
+            "general": counts_config.get("general", 5),
         }
 
-        self.all_digest_enabled = config.get('channels.all_digest.enabled', True)
-        self.all_digest_channel = config.get(
-            'channels.all_digest.target_channel',
-            self.marketplaces['ozon']['target_channel']
-        )
+        self.duplicate_threshold = config.get("processor.duplicate_threshold", 0.85)
+        self.moderation_enabled = config.get("moderation.enabled", True)
 
-        self.duplicate_threshold = config.get('processor.duplicate_threshold', 0.85)
-        self.moderation_enabled = config.get('moderation.enabled', True)
+    @property
+    def embeddings(self) -> EmbeddingService:
+        if self._embedding_service is None:
+            self._embedding_service = EmbeddingService(
+                model_name=self._embedding_model_name,
+                local_path=self._embedding_local_path,
+                allow_remote_download=self._embedding_allow_remote,
+                enable_fallback=self._embedding_enable_fallback,
+            )
+        return self._embedding_service
+
+    @property
+    def gemini(self) -> GeminiClient:
+        if self._gemini_client is None:
+            self._gemini_client = GeminiClient(
+                api_key=self.config.gemini_api_key,
+                model_name=self._gemini_model_name,
+            )
+        return self._gemini_client
 
     async def process_marketplace(self, marketplace: str, client: TelegramClient):
         """Обработка новостей для конкретного маркетплейса"""
@@ -61,29 +116,29 @@ class MarketplaceProcessor:
             logger.error(f"Неизвестный маркетплейс: {marketplace}")
             return
 
-        mp_config = self.marketplaces[marketplace]
+        mp_config = self.marketplaces.get(marketplace)
+        if mp_config is None:
+            logger.error(f"Маркетплейс {marketplace} отсутствует в конфигурации")
+            return
 
-        if not mp_config['enabled']:
+        if not mp_config.enabled:
             logger.info(f"Маркетплейс {marketplace} отключен в конфиге")
             return
 
-        logger.info(f"=" * 80)
+        logger.info("=" * 80)
         logger.info(f"🛒 ОБРАБОТКА НОВОСТЕЙ: {marketplace.upper()}")
-        logger.info(f"=" * 80)
+        logger.info("=" * 80)
 
         # ШАГ 1: Загружаем сообщения за последние 24 часа
-        messages = self.db.get_unprocessed_messages(hours=24)
-        logger.info(f"Загружено {len(messages)} необработанных сообщений")
+        base_messages = self.db.get_unprocessed_messages(hours=24)
+        logger.info(f"Загружено {len(base_messages)} необработанных сообщений")
 
-        if not messages:
+        if not base_messages:
             logger.info(f"Нет новых сообщений для {marketplace}")
             return
 
-        # ШАГ 2: Фильтруем по ключевым словам маркетплейса
         filtered_messages = self._filter_by_keywords(
-            messages,
-            mp_config['keywords'],
-            mp_config['exclude_keywords']
+            base_messages, mp_config.keywords_lower, mp_config.combined_exclude_keywords_lower
         )
         logger.info(f"После фильтрации по ключевым словам: {len(filtered_messages)} сообщений")
 
@@ -103,34 +158,29 @@ class MarketplaceProcessor:
         formatted_posts = self.gemini.select_and_format_marketplace_news(
             unique_messages,
             marketplace=marketplace,
-            top_n=mp_config['top_n']
+            top_n=mp_config.top_n,
+            marketplace_display_name=mp_config.display_name or marketplace,
         )
 
         if not formatted_posts:
             for msg in unique_messages:
-                self.db.mark_as_processed(
-                    msg['id'],
-                    rejection_reason='rejected_by_llm'
-                )
+                self.db.mark_as_processed(msg["id"], rejection_reason="rejected_by_llm")
             logger.warning(f"Gemini не отобрал ни одной новости для {marketplace}")
             return
 
         logger.info(f"Gemini отобрал {len(formatted_posts)} новостей для {marketplace}")
 
         # Сортируем от самой важной к менее важной
-        formatted_posts = sorted(formatted_posts, key=lambda x: x.get('score', 0), reverse=True)
+        formatted_posts = sorted(formatted_posts, key=lambda x: x.get("score", 0), reverse=True)
 
-        formatted_ids = {post['source_message_id'] for post in formatted_posts}
+        formatted_ids = {post["source_message_id"] for post in formatted_posts}
         for msg in unique_messages:
-            if msg['id'] not in formatted_ids:
-                self.db.mark_as_processed(
-                    msg['id'],
-                    rejection_reason='rejected_by_llm'
-                )
+            if msg["id"] not in formatted_ids:
+                self.db.mark_as_processed(msg["id"], rejection_reason="rejected_by_llm")
 
         # Помечаем сообщения как обработанные
         for post in formatted_posts:
-            self.db.mark_as_processed(post['source_message_id'], gemini_score=post.get('score'))
+            self.db.mark_as_processed(post["source_message_id"], gemini_score=post.get("score"))
 
         # ШАГ 5: Модерация (если включена)
         if self.moderation_enabled:
@@ -143,65 +193,59 @@ class MarketplaceProcessor:
             approved_posts = formatted_posts
 
         # ШАГ 6: Публикация
-        await self.publish_digest(client, approved_posts, marketplace, mp_config['target_channel'])
+        await self.publish_digest(
+            client,
+            approved_posts,
+            marketplace,
+            mp_config.target_channel,
+            display_name=mp_config.display_name or marketplace,
+        )
 
         logger.info(f"✅ Обработка {marketplace} завершена!")
 
     def _filter_by_keywords(
-        self,
-        messages: List[Dict],
-        keywords: List[str],
-        exclude_keywords: List[str]
-    ) -> List[Dict]:
+        self, messages: list[dict], keywords_lower: list[str], exclude_keywords_lower: list[str]
+    ) -> list[dict]:
         """Фильтрация сообщений по ключевым словам"""
         filtered = []
 
         for msg in messages:
-            text_lower = msg['text'].lower()
+            text_lower = msg["text"].lower()
 
             # Проверяем исключающие слова
-            if any(exclude.lower() in text_lower for exclude in exclude_keywords):
+            if exclude_keywords_lower and any(
+                exclude in text_lower for exclude in exclude_keywords_lower
+            ):
+                self.db.mark_as_processed(
+                    msg["id"], rejection_reason="rejected_by_exclude_keywords"
+                )
                 continue
 
             # Проверяем включающие слова
-            if any(keyword.lower() in text_lower for keyword in keywords):
-                filtered.append(msg)
-
-        filtered_ids = {msg['id'] for msg in filtered}
-        for msg in messages:
-            if msg['id'] in filtered_ids:
+            if keywords_lower and not any(keyword in text_lower for keyword in keywords_lower):
+                self.db.mark_as_processed(
+                    msg["id"], rejection_reason="rejected_by_keywords_mismatch"
+                )
                 continue
 
-            text_lower = msg['text'].lower()
-            if any(exclude.lower() in text_lower for exclude in exclude_keywords):
-                self.db.mark_as_processed(
-                    msg['id'],
-                    rejection_reason='rejected_by_exclude_keywords'
-                )
-            elif keywords and not any(keyword.lower() in text_lower for keyword in keywords):
-                self.db.mark_as_processed(
-                    msg['id'],
-                    rejection_reason='rejected_by_keywords_mismatch'
-                )
+            filtered.append(msg)
 
         return filtered
 
-    async def filter_duplicates(self, messages: List[Dict]) -> List[Dict]:
+    async def filter_duplicates(self, messages: list[dict]) -> list[dict]:
         """Фильтрация дубликатов через embeddings"""
         unique = []
 
         for msg in messages:
             # Генерируем embedding
-            embedding = self.embeddings.encode(msg['text'])
+            embedding = self.embeddings.encode(msg["text"])
 
             # Проверяем на дубликаты
             is_duplicate = self.db.check_duplicate(embedding, self.duplicate_threshold)
 
             if is_duplicate:
                 self.db.mark_as_processed(
-                    msg['id'],
-                    is_duplicate=True,
-                    rejection_reason='is_duplicate'
+                    msg["id"], is_duplicate=True, rejection_reason="is_duplicate"
                 )
                 continue
 
@@ -210,18 +254,15 @@ class MarketplaceProcessor:
         return unique
 
     async def moderate_posts(
-        self,
-        client: TelegramClient,
-        posts: List[Dict],
-        marketplace: str
-    ) -> List[Dict]:
+        self, client: TelegramClient, posts: list[dict], marketplace: str
+    ) -> list[dict]:
         """Отправка новостей на модерацию через Telegram"""
 
         logger.info(f"📋 Отправка {len(posts)} новостей на модерацию ({marketplace})")
 
         # Присваиваем ID для модерации
         for idx, post in enumerate(posts, 1):
-            post['moderation_id'] = idx
+            post["moderation_id"] = idx
 
         # Формируем сообщение для модерации
         message = self._format_moderation_message(posts, marketplace)
@@ -239,29 +280,29 @@ class MarketplaceProcessor:
     async def process_all_categories(self, client: TelegramClient):
         """Обработка всех новостей с 3-категорийной системой (5 WB + 5 Ozon + 5 Общих = 15)"""
 
-        logger.info(f"=" * 80)
-        logger.info(f"📦 ОБРАБОТКА НОВОСТЕЙ: ВСЕ КАТЕГОРИИ (3-КАТЕГОРИЙНАЯ СИСТЕМА)")
-        logger.info(f"=" * 80)
+        logger.info("=" * 80)
+        logger.info("📦 ОБРАБОТКА НОВОСТЕЙ: ВСЕ КАТЕГОРИИ (3-КАТЕГОРИЙНАЯ СИСТЕМА)")
+        logger.info("=" * 80)
 
-        # ШАГ 1: Загружаем ВСЕ необработанные сообщения за последние 24 часа
-        messages = self.db.get_unprocessed_messages(hours=24)
-        logger.info(f"Загружено {len(messages)} необработанных сообщений")
+        base_messages = self.db.get_unprocessed_messages(hours=24)
+        logger.info(f"Загружено {len(base_messages)} необработанных сообщений")
 
-        if not messages:
+        if not base_messages:
             logger.info("Нет новых сообщений")
             return
 
-        # ШАГ 2: Объединяем все exclude_keywords из обоих маркетплейсов
-        all_exclude_keywords = set()
-        for mp_config in self.marketplaces.values():
-            all_exclude_keywords.update(mp_config['exclude_keywords'])
-
-        # Фильтруем по исключающим словам
+        # ШАГ 2: Фильтруем по глобальным исключающим словам и сразу отмечаем отклонённые
         filtered_messages = []
-        for msg in messages:
-            text_lower = msg['text'].lower()
-            if not any(exclude.lower() in text_lower for exclude in all_exclude_keywords):
-                filtered_messages.append(msg)
+        for msg in base_messages:
+            text_lower = msg["text"].lower()
+            if self.all_exclude_keywords_lower and any(
+                exclude in text_lower for exclude in self.all_exclude_keywords_lower
+            ):
+                self.db.mark_as_processed(
+                    msg["id"], rejection_reason="rejected_by_exclude_keywords"
+                )
+                continue
+            filtered_messages.append(msg)
 
         logger.info(f"После фильтрации исключений: {len(filtered_messages)} сообщений")
 
@@ -280,21 +321,32 @@ class MarketplaceProcessor:
         # ШАГ 4: Отбор по 3 категориям через Gemini (5+5+5=15 новостей)
         categories = self.gemini.select_three_categories(
             unique_messages,
-            wb_count=5,
-            ozon_count=5,
-            general_count=5
+            wb_count=self.all_digest_counts["wildberries"],
+            ozon_count=self.all_digest_counts["ozon"],
+            general_count=self.all_digest_counts["general"],
         )
 
         # Подсчитываем сколько получилось
-        wb_count = len(categories.get('wildberries', []))
-        ozon_count = len(categories.get('ozon', []))
-        general_count = len(categories.get('general', []))
+        wb_count = len(categories.get("wildberries", []))
+        ozon_count = len(categories.get("ozon", []))
+        general_count = len(categories.get("general", []))
         total_count = wb_count + ozon_count + general_count
 
-        logger.info(f"Gemini отобрал: WB={wb_count}, Ozon={ozon_count}, Общие={general_count}, Всего={total_count}")
+        logger.info(
+            f"Gemini отобрал: WB={wb_count}, Ozon={ozon_count}, Общие={general_count}, Всего={total_count}"
+        )
+
+        selected_ids = {
+            post["source_message_id"]
+            for posts in categories.values()
+            for post in posts
+            if post.get("source_message_id")
+        }
 
         if total_count == 0:
             logger.warning("Gemini не отобрал ни одной новости")
+            for msg in unique_messages:
+                self.db.mark_as_processed(msg["id"], rejection_reason="rejected_by_llm")
             return
 
         # ШАГ 5: Модерация (выбор 10 из 15)
@@ -303,34 +355,60 @@ class MarketplaceProcessor:
 
             if not approved_posts:
                 logger.warning("Все новости отклонены на этапе модерации")
+                for msg_id in selected_ids:
+                    self.db.mark_as_processed(msg_id, rejection_reason="rejected_by_moderator")
                 return
         else:
             # Без модерации - берем все что есть
             approved_posts = (
-                categories.get('wildberries', []) +
-                categories.get('ozon', []) +
-                categories.get('general', [])
+                categories.get("wildberries", [])
+                + categories.get("ozon", [])
+                + categories.get("general", [])
             )
+
+        approved_ids = {
+            post.get("source_message_id")
+            for post in approved_posts
+            if post.get("source_message_id")
+        }
+
+        # Помечаем сообщения, которые прошли отбор Gemini, но не попали в итоговую публикацию
+        rejected_after_moderation = selected_ids - approved_ids
+        for msg_id in rejected_after_moderation:
+            self.db.mark_as_processed(msg_id, rejection_reason="rejected_by_moderator")
+
+        # Помечаем сообщения, которые Gemini не выбрал вовсе
+        unique_ids = {msg["id"] for msg in unique_messages}
+        not_selected_ids = unique_ids - selected_ids
+        for msg_id in not_selected_ids:
+            self.db.mark_as_processed(msg_id, rejection_reason="rejected_by_llm")
 
         # Помечаем сообщения как обработанные
         for post in approved_posts:
-            self.db.mark_as_processed(post['source_message_id'], gemini_score=post.get('score'))
+            self.db.mark_as_processed(post["source_message_id"], gemini_score=post.get("score"))
 
         # ШАГ 6: Публикация в канал
         target_channel = (
             self.all_digest_channel
             if self.all_digest_enabled and self.all_digest_channel
-            else self.marketplaces['ozon']['target_channel']
+            else next(
+                (mp.target_channel for mp in self.marketplaces.values() if mp.target_channel),
+                None,
+            )
         )
-        await self.publish_digest(client, approved_posts, "Маркетплейсы", target_channel)
+        await self.publish_digest(
+            client,
+            approved_posts,
+            "маркетплейсы",
+            target_channel,
+            display_name="Маркетплейсы",
+        )
 
-        logger.info(f"✅ Обработка всех категорий завершена!")
+        logger.info("✅ Обработка всех категорий завершена!")
 
     async def moderate_categories(
-        self,
-        client: TelegramClient,
-        categories: Dict[str, List[Dict]]
-    ) -> List[Dict]:
+        self, client: TelegramClient, categories: dict[str, list[dict]]
+    ) -> list[dict]:
         """Интерактивная модерация: выбор 10 из 15 новостей (по категориям)"""
 
         # Объединяем все новости из 3 категорий
@@ -339,7 +417,7 @@ class MarketplaceProcessor:
         # Добавляем категорию к каждому посту
         for cat_name, posts in categories.items():
             for post in posts:
-                post['category'] = cat_name
+                post["category"] = cat_name
                 all_posts.append(post)
 
         total = len(all_posts)
@@ -347,7 +425,7 @@ class MarketplaceProcessor:
 
         # Присваиваем ID для модерации
         for idx, post in enumerate(all_posts, 1):
-            post['moderation_id'] = idx
+            post["moderation_id"] = idx
 
         # Формируем сообщение для модерации
         message = self._format_categories_moderation_message(categories)
@@ -361,27 +439,39 @@ class MarketplaceProcessor:
         # TODO: Здесь можно добавить логику ожидания ответа от модератора
         # Пока возвращаем первые 10 (автоматический отбор)
         # Сортируем по score и берем топ-10
-        sorted_posts = sorted(all_posts, key=lambda x: x.get('score', 0), reverse=True)
+        sorted_posts = sorted(all_posts, key=lambda x: x.get("score", 0), reverse=True)
         return sorted_posts[:10]
 
-    def _format_categories_moderation_message(self, categories: Dict[str, List[Dict]]) -> str:
+    def _format_categories_moderation_message(self, categories: dict[str, list[dict]]) -> str:
         """Форматирование сообщения для модерации 3-категорийной системы"""
 
         number_emojis = {
-            1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣",
-            6: "6️⃣", 7: "7️⃣", 8: "8️⃣", 9: "9️⃣", 10: "🔟",
-            11: "1️⃣1️⃣", 12: "1️⃣2️⃣", 13: "1️⃣3️⃣", 14: "1️⃣4️⃣", 15: "1️⃣5️⃣"
+            1: "1️⃣",
+            2: "2️⃣",
+            3: "3️⃣",
+            4: "4️⃣",
+            5: "5️⃣",
+            6: "6️⃣",
+            7: "7️⃣",
+            8: "8️⃣",
+            9: "9️⃣",
+            10: "🔟",
+            11: "1️⃣1️⃣",
+            12: "1️⃣2️⃣",
+            13: "1️⃣3️⃣",
+            14: "1️⃣4️⃣",
+            15: "1️⃣5️⃣",
         }
 
-        lines = [f"📋 **МОДЕРАЦИЯ: ВСЕ КАТЕГОРИИ**"]
-        lines.append(f"_Нужно выбрать 10 лучших из 15 новостей_\n")
+        lines = ["📋 **МОДЕРАЦИЯ: ВСЕ КАТЕГОРИИ**"]
+        lines.append("_Нужно выбрать 10 лучших из 15 новостей_\n")
 
         idx = 1
 
         # Категория Wildberries
-        if categories.get('wildberries'):
+        if categories.get("wildberries"):
             lines.append("📦 **WILDBERRIES**\n")
-            for post in categories['wildberries']:
+            for post in categories["wildberries"]:
                 emoji = number_emojis.get(idx, f"{idx}.")
                 lines.append(f"{emoji} **{post['title']}**")
                 lines.append(f"_{post['description'][:100]}..._")
@@ -389,9 +479,9 @@ class MarketplaceProcessor:
                 idx += 1
 
         # Категория Ozon
-        if categories.get('ozon'):
+        if categories.get("ozon"):
             lines.append("📦 **OZON**\n")
-            for post in categories['ozon']:
+            for post in categories["ozon"]:
                 emoji = number_emojis.get(idx, f"{idx}.")
                 lines.append(f"{emoji} **{post['title']}**")
                 lines.append(f"_{post['description'][:100]}..._")
@@ -399,9 +489,9 @@ class MarketplaceProcessor:
                 idx += 1
 
         # Категория Общие
-        if categories.get('general'):
+        if categories.get("general"):
             lines.append("📦 **ОБЩИЕ**\n")
-            for post in categories['general']:
+            for post in categories["general"]:
                 emoji = number_emojis.get(idx, f"{idx}.")
                 lines.append(f"{emoji} **{post['title']}**")
                 lines.append(f"_{post['description'][:100]}..._")
@@ -417,19 +507,27 @@ class MarketplaceProcessor:
 
         return "\n".join(lines)
 
-    def _format_moderation_message(self, posts: List[Dict], marketplace: str) -> str:
+    def _format_moderation_message(self, posts: list[dict], marketplace: str) -> str:
         """Форматирование сообщения для модерации"""
 
         number_emojis = {
-            1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣",
-            6: "6️⃣", 7: "7️⃣", 8: "8️⃣", 9: "9️⃣", 10: "🔟"
+            1: "1️⃣",
+            2: "2️⃣",
+            3: "3️⃣",
+            4: "4️⃣",
+            5: "5️⃣",
+            6: "6️⃣",
+            7: "7️⃣",
+            8: "8️⃣",
+            9: "9️⃣",
+            10: "🔟",
         }
 
         lines = [f"📋 **МОДЕРАЦИЯ: {marketplace.upper()}**"]
-        lines.append(f"_(Отсортировано по важности)_\n")
+        lines.append("_(Отсортировано по важности)_\n")
 
         for post in posts:
-            idx = post['moderation_id']
+            idx = post["moderation_id"]
             emoji = number_emojis.get(idx, f"{idx}️⃣")
 
             lines.append(f"{emoji} **{post['title']}**")
@@ -448,9 +546,10 @@ class MarketplaceProcessor:
     async def publish_digest(
         self,
         client: TelegramClient,
-        posts: List[Dict],
+        posts: list[dict],
         marketplace: str,
-        target_channel: str
+        target_channel: str,
+        display_name: str | None = None,
     ):
         """Публикация дайджеста в канал"""
 
@@ -459,12 +558,21 @@ class MarketplaceProcessor:
         # Формируем дайджест
         yesterday = now_msk() - timedelta(days=1)
         date_str = yesterday.strftime("%d-%m-%Y")
+        header_name = display_name or marketplace
 
-        lines = [f"📌 Главные новости {marketplace.upper()} за {date_str}\n"]
+        lines = [f"📌 Главные новости {header_name} за {date_str}\n"]
 
         number_emojis = {
-            1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣",
-            6: "6️⃣", 7: "7️⃣", 8: "8️⃣", 9: "9️⃣", 10: "🔟"
+            1: "1️⃣",
+            2: "2️⃣",
+            3: "3️⃣",
+            4: "4️⃣",
+            5: "5️⃣",
+            6: "6️⃣",
+            7: "7️⃣",
+            8: "8️⃣",
+            9: "9️⃣",
+            10: "🔟",
         }
 
         for idx, post in enumerate(posts, 1):
@@ -472,11 +580,11 @@ class MarketplaceProcessor:
             lines.append(f"{emoji} **{post['title']}**\n")
             lines.append(f"{post['description']}\n")
 
-            if post.get('source_link'):
+            if post.get("source_link"):
                 lines.append(f"{post['source_link']}\n")
 
         lines.append("_" * 36)
-        lines.append(f"Подпишись на новости {marketplace.upper()}")
+        lines.append(f"Подпишись на новости {header_name}")
         lines.append(target_channel)
 
         digest = "\n".join(lines)
@@ -487,12 +595,12 @@ class MarketplaceProcessor:
 
         # Сохраняем embeddings
         for post in posts:
-            embedding = self.embeddings.encode(post['text'])
+            embedding = self.embeddings.encode(post["text"])
             self.db.save_published(
-                text=post['text'],
+                text=post["text"],
                 embedding=embedding,
-                source_message_id=post['source_message_id'],
-                source_channel_id=post['source_channel_id']
+                source_message_id=post["source_message_id"],
+                source_channel_id=post["source_channel_id"],
             )
 
         logger.info(f"💾 Сохранено {len(posts)} embeddings в БД")
@@ -507,11 +615,9 @@ class MarketplaceProcessor:
 
         # Подключаемся к Telegram с отдельной сессией для processor
         # Это предотвращает конфликты с listener который использует основную сессию
-        processor_session = self.config.get('telegram.session_name') + '_processor'
+        processor_session = self.config.get("telegram.session_name") + "_processor"
         client = TelegramClient(
-            processor_session,
-            self.config.telegram_api_id,
-            self.config.telegram_api_hash
+            processor_session, self.config.telegram_api_id, self.config.telegram_api_hash
         )
 
         await client.start(phone=self.config.telegram_phone)
@@ -522,7 +628,7 @@ class MarketplaceProcessor:
                 await self.process_all_categories(client)
             else:
                 # СТАРАЯ СИСТЕМА: Обрабатываем каждый маркетплейс отдельно
-                for marketplace in ['ozon', 'wildberries']:
+                for marketplace in self.marketplace_names:
                     try:
                         await self.process_marketplace(marketplace, client)
                     except Exception as e:

@@ -1,9 +1,10 @@
 """Утилиты для работы с временными зонами"""
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime
+
 import pytz
 
 # Московское время (UTC+3)
-MOSCOW_TZ = pytz.timezone('Europe/Moscow')
+MOSCOW_TZ = pytz.timezone("Europe/Moscow")
 
 
 def now_msk() -> datetime:
@@ -23,7 +24,7 @@ def now_utc() -> datetime:
     Returns:
         datetime с timezone UTC
     """
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def to_msk(dt: datetime) -> datetime:
@@ -38,7 +39,7 @@ def to_msk(dt: datetime) -> datetime:
     """
     if dt.tzinfo is None:
         # Если naive datetime, считаем что это UTC
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt.astimezone(MOSCOW_TZ)
 
 
@@ -55,7 +56,7 @@ def to_utc(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         # Если naive datetime, считаем что это московское время
         dt = MOSCOW_TZ.localize(dt)
-    return dt.astimezone(timezone.utc)
+    return dt.astimezone(UTC)
 
 
 def format_msk(dt: datetime) -> str:

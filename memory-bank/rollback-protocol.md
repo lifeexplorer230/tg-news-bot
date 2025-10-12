@@ -1,4 +1,5 @@
 # ↩️ ROLLBACK PROTOCOL
+
 ## Процедуры отката при инцидентах
 
 **Версия:** 1.0
@@ -220,9 +221,11 @@ echo "[$(date)] ОТКАТ схемы БД" >> logs/migration_$(date +%Y-%m-%d).
 **Причина проблемы:** <анализ>
 **План исправления:** <что будем делать дальше>
 **Обновлены документы:**
+
 - [ ] logs/migration_YYYY-MM-DD.log
 - [ ] DOROZHNAYA_KARTA.md
 - [ ] memory-bank/diff-limit-plan.md
+
 ```
 
 Сохранить в: `logs/rollback_YYYY-MM-DD_HH-MM.log`

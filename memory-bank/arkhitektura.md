@@ -3,12 +3,15 @@
 ## 📦 Компоненты
 
 ### 1. Listener (services/telegram_listener.py)
+
 **Назначение**: 24/7 прослушивание Telegram каналов
 
 **Ключевые классы**:
+
 - `TelegramListener` - основной класс слушателя
 
 **Поток работы**:
+
 1. Подключается к Telegram через Telethon (User API)
 2. Получает список всех диалогов (каналы пользователя)
 3. Слушает новые сообщения через `client.on(events.NewMessage)`
@@ -22,12 +25,15 @@
 ---
 
 ### 2. Processor (services/marketplace_processor.py)
+
 **Назначение**: Обработка и публикация новостей
 
 **Ключевые классы**:
+
 - `MarketplaceProcessor` - основной процессор
 
 **Поток работы**:
+
 1. Загружает сообщения за последние 24 часа
 2. Фильтрует по ключевым словам (Ozon / WB)
 3. Проверяет дубликаты через embeddings
@@ -37,6 +43,7 @@
 7. Публикует одобренные новости
 
 **Зависимости**:
+
 - `GeminiClient` - отбор новостей
 - `Embeddings` - проверка дубликатов
 - `Database` - сохранение результатов
@@ -46,9 +53,11 @@
 ---
 
 ### 3. Database (database/db.py)
+
 **Назначение**: Хранение и управление данными
 
 **Таблицы**:
+
 ```sql
 channels (id, username, title, is_active, last_checked)
 raw_messages (id, channel_id, message_id, text, date, created_at, processed, gemini_score, rejection_reason)
@@ -56,6 +65,7 @@ published (id, text, embedding, published_at, source_message_id, source_channel_
 ```
 
 **Ключевые методы**:
+
 - `save_message()` - сохранить сырое сообщение
 - `mark_as_processed()` - пометить обработанным с причиной
 - `check_duplicate()` - проверка через cosine similarity
@@ -64,6 +74,7 @@ published (id, text, embedding, published_at, source_message_id, source_channel_
 - `cleanup_old_data()` - очистка старых данных
 
 **Особенности**:
+
 - Хранит даты в UTC
 - WAL mode для конкурентности
 - timeout=30s для избежания блокировок
@@ -72,17 +83,21 @@ published (id, text, embedding, published_at, source_message_id, source_channel_
 ---
 
 ### 4. Gemini Client (services/gemini_client.py)
+
 **Назначение**: Интеграция с Google Gemini API
 
 **Ключевые методы**:
+
 - `select_news()` - отбор топ-N новостей
 
 **Промпт**:
+
 - Критерии важности для маркетплейсов
 - Исключение рекламы и курсов
 - Валидация через Pydantic схему
 
 **Retry логика**:
+
 - 3 попытки через tenacity
 - Exponential backoff
 - Graceful fallback на пустой список
@@ -90,18 +105,22 @@ published (id, text, embedding, published_at, source_message_id, source_channel_
 ---
 
 ### 5. Embeddings (services/embeddings.py)
+
 **Назначение**: Векторное представление текста
 
 **Модель**: `paraphrase-multilingual-MiniLM-L12-v2`
+
 - 384 измерения
 - Поддержка русского языка
 - Локально в ./models/
 
 **Методы**:
+
 - `encode()` - текст → вектор (384-dim)
 - `similarity()` - cosine similarity между векторами
 
 **Использование**:
+
 - Проверка дубликатов (threshold 0.85)
 - Сохранение embeddings опубликованного
 - Поиск похожих новостей
@@ -109,14 +128,17 @@ published (id, text, embedding, published_at, source_message_id, source_channel_
 ---
 
 ### 6. Status Reporter (services/status_reporter.py)
+
 **Назначение**: Автоматические отчёты в Telegram
 
 **Особенности**:
+
 - Использует Bot API (не User API!)
 - Отправляет статистику каждые N минут
 - Форматирует данные из get_today_stats()
 
 **Конфигурация**:
+
 ```yaml
 status:
   enabled: true
@@ -181,6 +203,7 @@ status:
 ## 🧩 Зависимости между модулями
 
 ### Listener
+
 ```
 TelegramListener
   ├── Database (own connection)
@@ -189,6 +212,7 @@ TelegramListener
 ```
 
 ### Processor
+
 ```
 MarketplaceProcessor
   ├── Database (own connection)
@@ -201,6 +225,7 @@ MarketplaceProcessor
 ```
 
 ### Status Reporter
+
 ```
 StatusReporter
   ├── Database (own connection)
@@ -213,27 +238,30 @@ StatusReporter
 
 ## 📊 Конфигурация (config.yaml)
 
-### Секции:
+### Секции
+
 - **telegram**: session_name
 - **gemini**: model, temperature, max_tokens
 - **database**: path
 - **listener**: reconnect_timeout, min_message_length
 - **processor**: schedule_time, timezone, duplicate_threshold
 - **embeddings**: model, local_path
-- **channels**: ozon, wildberries, all_digest (keywords, target_channel, top_n)
+- **marketplaces**: список маркетплейсов (name, target_channel, top_n, keywords, exclude_keywords)
 - **moderation**: enabled, timeout_hours
 - **cleanup**: raw_messages_days, published_days
 - **status**: enabled, bot_token, chat, interval_minutes
 - **logging**: level, format, file
 
-### Загрузка:
+### Загрузка
+
 `utils/config.py` - класс `Config` с методом `get(key, default)`
 
 ---
 
 ## 🗄️ База данных
 
-### Schema:
+### Schema
+
 ```sql
 -- Каналы источники
 CREATE TABLE channels (
@@ -270,7 +298,8 @@ CREATE TABLE published (
 );
 ```
 
-### Индексы:
+### Индексы
+
 ```sql
 CREATE INDEX idx_raw_messages_date ON raw_messages(date);
 CREATE INDEX idx_raw_messages_processed ON raw_messages(processed);
@@ -281,7 +310,8 @@ CREATE INDEX idx_published_date ON published(published_at);
 
 ## 🔧 Настройки SQLite
 
-### Подключение:
+### Подключение
+
 ```python
 self.conn = sqlite3.connect(
     self.db_path,
@@ -292,7 +322,8 @@ self.conn.execute('PRAGMA journal_mode=WAL')      # Write-Ahead Logging
 self.conn.execute('PRAGMA busy_timeout=30000')    # Timeout в мс
 ```
 
-### WAL (Write-Ahead Log):
+### WAL (Write-Ahead Log)
+
 - Позволяет одновременное чтение и запись
 - Читатели не блокируют писателей
 - Периодический checkpoint для merge
@@ -301,11 +332,13 @@ self.conn.execute('PRAGMA busy_timeout=30000')    # Timeout в мс
 
 ## 🕐 Timezone обработка
 
-### Принцип:
+### Принцип
+
 - **БД хранит UTC**: все DATETIME в UTC
 - **Отображение в локальной timezone**: статистика, логи
 
-### Методы:
+### Методы
+
 ```python
 def _now_local(self):
     """Текущее время в локальной timezone"""
@@ -318,7 +351,8 @@ def _to_db_datetime(self, dt: datetime) -> str:
     return dt.astimezone(pytz.UTC).strftime('%Y-%m-%d %H:%M:%S')
 ```
 
-### Примеры:
+### Примеры
+
 ```python
 # Сохранение
 local_time = datetime.now(tz)  # 2025-10-12 15:00:00 MSK
@@ -332,13 +366,15 @@ stats = get_today_stats()  # "сегодня" = начиная с 00:00 MSK
 
 ## 🧪 Тестирование
 
-### Тестовые файлы:
+### Тестовые файлы
+
 - `test_fixes.py` - A1, A2 (check_duplicate, rejection_reason)
 - `test_concurrency.py` - A4 (SQLite concurrency)
 - `test_timezone.py` - C9 (timezone handling)
 - `test_database.py` - D1 (7 тестовых наборов)
 
-### Принципы:
+### Принципы
+
 - Использовать tempfile для изоляции
 - In-memory SQLite где возможно
 - Проверять edge cases
@@ -348,7 +384,8 @@ stats = get_today_stats()  # "сегодня" = начиная с 00:00 MSK
 
 ## 🚀 Deployment
 
-### Docker:
+### Docker
+
 ```yaml
 services:
   marketplace-listener:
@@ -365,11 +402,13 @@ services:
       - ./data:/app/data
 ```
 
-### Volumes:
+### Volumes
+
 - `./data` - база данных, session файлы, модели
 - `./logs` - логи бота
 
-### Образ:
+### Образ
+
 - Base: python:3.10-slim
 - Размер: ~2.5GB (из-за torch)
 - Сборка: ~10-15 минут

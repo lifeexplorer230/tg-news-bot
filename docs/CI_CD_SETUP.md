@@ -20,6 +20,7 @@
 Запускается на Ubuntu с Python 3.11 и 3.12.
 
 **Шаги:**
+
 1. Checkout кода
 2. Установка Python
 3. Кэширование pip пакетов
@@ -35,6 +36,7 @@
 Проверка безопасности кода и зависимостей.
 
 **Шаги:**
+
 1. **safety** - проверка уязвимостей в зависимостях
 2. **bandit** - статический анализ безопасности кода
 
@@ -43,6 +45,7 @@
 Проверка что Docker образ собирается корректно.
 
 **Шаги:**
+
 1. Build Docker image
 2. Smoke test - проверка импортов
 
@@ -108,6 +111,7 @@ docker run --rm marketplace-news-bot:test python -c "import database.db; import 
 ### ruff.toml
 
 Настройки для ruff linter:
+
 - Line length: 100
 - Target: Python 3.11+
 - Enabled rules: E, W, F, I, N, UP, B, C4, DTZ, T10, PIE, T20
@@ -116,6 +120,7 @@ docker run --rm marketplace-news-bot:test python -c "import database.db; import 
 ### pyproject.toml
 
 Настройки для black и pytest:
+
 - **Black**: line-length 100, target py311/py312
 - **Pytest**: testpaths, markers, coverage options
 - **Coverage**: exclude tests, venv, data; fail-under 60%
@@ -140,12 +145,14 @@ pip install ruff
 ### Ошибка "coverage below 60%"
 
 Добавьте тесты или понизьте порог в:
+
 - `.github/workflows/ci.yml` (строка `--fail-under=60`)
 - `pyproject.toml` (`fail_under = 60`)
 
 ### Docker build fails
 
 Проверьте:
+
 1. `Dockerfile` корректен
 2. Все зависимости в `requirements.txt`
 3. Нет hardcoded путей

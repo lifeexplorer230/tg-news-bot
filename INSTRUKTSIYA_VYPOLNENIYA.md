@@ -63,6 +63,17 @@ pytest tests/
 python -c "from database.db import Database; print('OK')"
 ```
 
+### Pre-commit и автоформатирование
+
+```bash
+pip install -r requirements-dev.txt     # Установить dev-зависимости
+pre-commit install                      # Установить хуки один раз
+pre-commit run --all-files              # Проверить весь проект перед пушем
+```
+
+- Хуки запускают ruff, black, isort, markdownlint и поиск секретов.
+- Не переходи к коммиту, пока `pre-commit run --all-files` не завершится без ошибок.
+
 ### Правила логирования
 
 ```bash
@@ -461,11 +472,20 @@ git push origin main
 
 ```python
 # Было:
-target_channel = self.marketplaces['ozon']['target_channel']
+target_channel = next(
+    (mp.target_channel for mp in self.marketplaces.values() if mp.target_channel),
+    None,
+)
 
 # Стало:
-target_channel = self.config.get('channels.all_digest.target_channel',
-                                  self.marketplaces['ozon']['target_channel'])
+target_channel = (
+    self.all_digest_channel
+    if self.all_digest_enabled and self.all_digest_channel
+    else next(
+        (mp.target_channel for mp in self.marketplaces.values() if mp.target_channel),
+        None,
+    )
+)
 ```
 
 **Команды после изменений:**

@@ -82,9 +82,14 @@ run-status:  ## Send status report
 	python test_status.py
 
 db-backup:  ## Backup database
-	@mkdir -p backups
-	@cp data/marketplace_news.db backups/marketplace_news_$(shell date +%Y%m%d_%H%M%S).db
-	@echo "✅ Database backed up to backups/"
+	./scripts/backup_db.sh
+
+db-restore:  ## Restore database (usage: make db-restore BACKUP=path)
+	@if [ -z "$(BACKUP)" ]; then \
+		echo "Usage: make db-restore BACKUP=backups/marketplace_news_<timestamp>.db"; \
+		exit 1; \
+	fi
+	./scripts/restore_db.sh "$(BACKUP)"
 
 db-stats:  ## Show database statistics
 	sqlite3 data/marketplace_news.db "SELECT 'Channels: ' || COUNT(*) FROM channels; SELECT 'Messages: ' || COUNT(*) FROM raw_messages; SELECT 'Published: ' || COUNT(*) FROM published;"

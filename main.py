@@ -3,36 +3,67 @@
 Marketplace News Bot - автоматический агрегатор новостей про маркетплейсы
 Поддерживает Ozon и Wildberries
 """
+from __future__ import annotations
+
 import asyncio
-import sys
+import contextlib
+import logging
 import signal
-import time
-import schedule
+import sys
 import threading
-from utils.config import load_config
-from utils.logger import get_logger
+import time
+
+import schedule
+
 from database.db import Database
-from services.telegram_listener import TelegramListener
 from services.marketplace_processor import MarketplaceProcessor
 from services.status_reporter import run_status_reporter
+from services.telegram_listener import TelegramListener
+from utils.config import Config, load_config
+from utils.logger import configure_logging, get_logger
 
 logger = get_logger(__name__)
 
 # Глобальная переменная для graceful shutdown
 running = True
+_shutdown_events: list[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = []
+
+
+def register_shutdown_event(
+    event: asyncio.Event,
+) -> tuple[asyncio.AbstractEventLoop, asyncio.Event]:
+    """Регистрирует asyncio.Event, который будет установлен при остановке."""
+    loop = asyncio.get_running_loop()
+    entry = (loop, event)
+    _shutdown_events.append(entry)
+    return entry
 
 
 def signal_handler(sig, frame):
     """Обработчик сигналов для graceful shutdown"""
     global running
-    logger.info("Получен сигнал завершения...")
+    if not running:
+        return
     running = False
-    sys.exit(0)
+    logger.info("Получен сигнал завершения (%s)...", signal.Signals(sig).name)
+    for loop, event in list(_shutdown_events):
+        loop.call_soon_threadsafe(event.set)
+    _shutdown_events.clear()
 
 
-async def run_listener_mode():
+async def run_listener_mode(config: Config | None = None):
     """Запуск listener (слушает каналы 24/7)"""
-    config = load_config()
+    external_config = config is not None
+    config = config or load_config()
+    if not external_config:
+        configure_logging(
+            level=config.log_level,
+            log_file=config.log_file,
+            rotation=config.log_rotation,
+            file_format=config.log_format,
+            date_format=config.log_date_format,
+        )
+        logger.setLevel(getattr(logging, config.log_level.upper(), logging.INFO))
 
     logger.info("=" * 80)
     logger.info("🎧 ЗАПУСК LISTENER - Marketplace News Bot")
@@ -42,12 +73,50 @@ async def run_listener_mode():
     db = Database(config.db_path)
 
     listener = TelegramListener(config, db)
-    await listener.start()
+    shutdown_event = asyncio.Event()
+    token = register_shutdown_event(shutdown_event)
+
+    listener_task = asyncio.create_task(listener.start())
+    shutdown_task = asyncio.create_task(shutdown_event.wait())
+
+    try:
+        done, _ = await asyncio.wait(
+            {listener_task, shutdown_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        if shutdown_task in done:
+            logger.info("Остановка listener по сигналу")
+            await listener.stop()
+            if not listener_task.done():
+                listener_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await listener_task
+        else:
+            shutdown_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await shutdown_task
+    finally:
+        if token in _shutdown_events:
+            _shutdown_events.remove(token)
+        with contextlib.suppress(Exception):
+            await listener.stop()
+        db.close()
 
 
-async def run_processor_mode():
+async def run_processor_mode(config: Config | None = None):
     """Запуск processor (обработка новостей)"""
-    config = load_config()
+    external_config = config is not None
+    config = config or load_config()
+    if not external_config:
+        configure_logging(
+            level=config.log_level,
+            log_file=config.log_file,
+            rotation=config.log_rotation,
+            file_format=config.log_format,
+            date_format=config.log_date_format,
+        )
+        logger.setLevel(getattr(logging, config.log_level.upper(), logging.INFO))
 
     logger.info("=" * 80)
     logger.info("⚙️  ЗАПУСК PROCESSOR - Marketplace News Bot")
@@ -57,10 +126,10 @@ async def run_processor_mode():
     await processor.run()
 
 
-def schedule_processor(config, db):
+def schedule_processor(config):
     """Настроить расписание для processor"""
-    schedule_time = config.get('processor.schedule_time', '09:00')
-    timezone = config.get('processor.timezone', 'Europe/Moscow')
+    schedule_time = config.get("processor.schedule_time", "09:00")
+    timezone = config.get("processor.timezone", "Europe/Moscow")
 
     logger.info(f"⏰ Настройка расписания processor: каждый день в {schedule_time} ({timezone})")
 
@@ -74,12 +143,12 @@ def schedule_processor(config, db):
 
 def schedule_status_reporter(config, db):
     """Настроить расписание для отправки статуса"""
-    if not config.get('status.enabled', False):
+    if not config.get("status.enabled", False):
         logger.info("📊 Отправка статуса отключена в конфигурации")
         return
 
-    interval_minutes = config.get('status.interval_minutes', 60)
-    chat = config.get('status.chat', 'Soft Status')
+    interval_minutes = config.get("status.interval_minutes", 60)
+    chat = config.get("status.chat", "Soft Status")
 
     logger.info(f"📊 Настройка отправки статуса: каждые {interval_minutes} минут в '{chat}'")
 
@@ -104,7 +173,34 @@ def run_scheduler():
 async def start_listener_with_scheduler(config, db):
     """Запустить listener с активным scheduler в фоне"""
     listener = TelegramListener(config, db)
-    await listener.start()
+    shutdown_event = asyncio.Event()
+    token = register_shutdown_event(shutdown_event)
+
+    listener_task = asyncio.create_task(listener.start())
+    shutdown_task = asyncio.create_task(shutdown_event.wait())
+
+    try:
+        done, _ = await asyncio.wait(
+            {listener_task, shutdown_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        if shutdown_task in done:
+            logger.info("Остановка listener (режим all) по сигналу")
+            await listener.stop()
+            if not listener_task.done():
+                listener_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await listener_task
+        else:
+            shutdown_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await shutdown_task
+    finally:
+        if token in _shutdown_events:
+            _shutdown_events.remove(token)
+        with contextlib.suppress(Exception):
+            await listener.stop()
 
 
 def main():
@@ -119,39 +215,48 @@ def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "all"
 
     if mode not in ["listener", "processor", "all"]:
-        print("Usage: python main.py [listener|processor|all]")
-        print("")
-        print("Modes:")
-        print("  listener  - Слушает Telegram каналы и сохраняет сообщения")
-        print("  processor - Обрабатывает сообщения, отбирает новости и публикует (одноразово)")
-        print("  all       - Listener + scheduled processor + status reporter (по умолчанию)")
+        logger.error(
+            "Usage: python main.py [listener|processor|all]\n\n"
+            "Modes:\n"
+            "  listener  - Слушает Telegram каналы и сохраняет сообщения\n"
+            "  processor - Обрабатывает сообщения, отбирает новости и публикует (одноразово)\n"
+            "  all       - Listener + scheduled processor + status reporter (по умолчанию)"
+        )
         sys.exit(1)
+
+    # Загружаем конфигурацию
+    config = load_config()
+    configure_logging(
+        level=config.log_level,
+        log_file=config.log_file,
+        rotation=config.log_rotation,
+        file_format=config.log_format,
+        date_format=config.log_date_format,
+    )
+    logger.setLevel(getattr(logging, config.log_level.upper(), logging.INFO))
 
     logger.info("=" * 80)
     logger.info("🚀 MARKETPLACE NEWS BOT")
     logger.info("=" * 80)
-
-    # Загружаем конфигурацию
-    config = load_config()
     db = Database(config.db_path)
 
     try:
         if mode == "listener":
             # Только listener
             logger.info("Режим: LISTENER")
-            asyncio.run(run_listener_mode())
+            asyncio.run(run_listener_mode(config))
 
         elif mode == "processor":
             # Только processor (одноразовый запуск)
             logger.info("Режим: PROCESSOR (одноразовый запуск)")
-            asyncio.run(run_processor_mode())
+            asyncio.run(run_processor_mode(config))
 
         elif mode == "all":
             # Оба режима: listener + scheduler для processor + status reporter
             logger.info("Режим: ALL (listener + scheduled processor + status reporter)")
 
             # Настраиваем расписание
-            schedule_processor(config, db)
+            schedule_processor(config)
             schedule_status_reporter(config, db)
 
             # Запускаем scheduler в отдельном потоке

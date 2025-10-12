@@ -79,7 +79,10 @@ for post in formatted_posts:
 
 ```python
 # marketplace_processor.py:277
-target_channel = self.marketplaces['ozon']['target_channel']  # Не правильно!
+target_channel = next(
+    (mp.target_channel for mp in self.marketplaces.values() if mp.target_channel),
+    None,
+)  # Не правильно!
 ```
 
 **Ответ разработчика:**

@@ -5,6 +5,21 @@ All notable changes to Marketplace News Bot will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2025-10-13
+
+### Added
+
+- Pre-commit hook chain (ruff, black, isort, markdownlint, detect-secrets) with updated dev requirements.
+- Docker healthcheck (`docker/healthcheck.py`) и restart policy `always` для listener.
+- Ротация логов: RotatingFileHandler, конфигурация `logging.rotate`, `docker/logrotate.conf`.
+- Скрипты резервного копирования и восстановления (`scripts/backup_db.sh`, `scripts/restore_db.sh`) + runbook.
+- Тест `tests/test_healthcheck.py` для проверки heartbeat-скрипта.
+
+### Changed
+
+- Docker image теперь включает пакет `logrotate`.
+- README/QUICK_START/инструкции обновлены инструкциями по pre-commit, healthcheck и бэкапам.
+
 ## [2.0.0] - 2025-10-12
 
 ### 🎉 Major Release - Production Ready
@@ -14,6 +29,7 @@ This release represents the completion of a comprehensive migration and stabiliz
 ### ✨ Added
 
 #### Core Features
+
 - **Duplicate Detection System** (`database/db.py:291-324`)
   - Implemented `check_duplicate()` using embeddings with cosine similarity
   - Configurable similarity threshold (default: 0.85)
@@ -29,6 +45,7 @@ This release represents the completion of a comprehensive migration and stabiliz
   - Configurable via `channels.all_digest.target_channel`
 
 #### Performance & Optimization
+
 - **Batch Embeddings Processing** (`services/embeddings.py`)
   - 8.24x performance improvement over sequential processing
   - Reduced processing time from 1.268s to 0.154s for typical batches
@@ -40,6 +57,7 @@ This release represents the completion of a comprehensive migration and stabiliz
   - `PRAGMA journal_mode=WAL` for concurrent read/write
 
 #### API Integration & Reliability
+
 - **Gemini API Robustness** (`services/gemini_client.py`)
   - Retry logic with exponential backoff (3 attempts)
   - Pydantic validation for API responses
@@ -51,6 +69,7 @@ This release represents the completion of a comprehensive migration and stabiliz
   - Fallback mechanism with warnings
 
 #### Testing & Quality
+
 - **Database Test Suite** (`tests/test_database.py`)
   - 22 comprehensive tests
   - 97.01% code coverage for `database/db.py`
@@ -66,6 +85,7 @@ This release represents the completion of a comprehensive migration and stabiliz
   - LLM abstraction layer testing
 
 #### DevOps & Automation
+
 - **CI/CD Pipeline** (`.github/workflows/`)
   - Automated linting with ruff
   - Automated testing with pytest
@@ -78,6 +98,7 @@ This release represents the completion of a comprehensive migration and stabiliz
   - pytest with coverage reporting (`pytest.ini`)
 
 #### Documentation
+
 - **Comprehensive Guides**
   - `DOROZHNAYA_KARTA.md` - Migration roadmap
   - `ROADMAP_ANALYSIS.md` - Detailed task analysis

@@ -3,8 +3,8 @@
 ## 📝 Чек-лист подготовки
 
 - [ ] Отдельный Telegram аккаунт (НЕ тот же что для AI News Bot!)
-- [ ] API credentials от Telegram (https://my.telegram.org/apps)
-- [ ] Gemini API key (https://makersuite.google.com/app/apikey)
+- [ ] API credentials от Telegram (<https://my.telegram.org/apps>)
+- [ ] Gemini API key (<https://makersuite.google.com/app/apikey>)
 - [ ] Два Telegram канала созданы (для Ozon и Wildberries)
 - [ ] Подписал новый аккаунт на 200 каналов про маркетплейсы
 
@@ -20,6 +20,7 @@ nano .env
 ```
 
 Заполни:
+
 ```
 TELEGRAM_API_ID=123456
 TELEGRAM_API_HASH=abc123...
@@ -35,12 +36,16 @@ WB_CHANNEL=@your_wb_channel
 ### 2️⃣ Настрой config.yaml
 
 ```yaml
-channels:
-  ozon:
-    target_channel: "@your_ozon_channel"  # 👈 Замени!
+marketplaces:
+  - name: "ozon"
+    target_channel: "@your_ozон_channel"   # 👈 Замени!
 
-  wildberries:
+  - name: "wildberries"
     target_channel: "@your_wb_channel"     # 👈 Замени!
+
+channels:
+  all_digest:
+    target_channel: "@your_digest_channel" # 👈 Опционально для общего дайджеста
 ```
 
 ### 3️⃣ Собери Docker образ
@@ -59,7 +64,7 @@ docker-compose run marketplace-listener python main.py listener
 # После успешной авторизации: Ctrl+C
 ```
 
-### 5️⃣ Запусти!
+### 5️⃣ Запусти
 
 ```bash
 # Listener в фоне (собирает сообщения 24/7)
@@ -121,6 +126,7 @@ crontab -e
 ## 🆘 Проблемы?
 
 ### "Session already running"
+
 ```bash
 docker-compose down
 sleep 5
@@ -128,6 +134,7 @@ docker-compose up -d marketplace-listener
 ```
 
 ### "Database locked"
+
 ```bash
 docker-compose stop marketplace-listener
 sleep 3
@@ -135,8 +142,9 @@ docker-compose up -d marketplace-listener
 ```
 
 ### "Gemini API error"
+
 - Проверь API key в `.env`
-- Проверь квоту: https://makersuite.google.com/
+- Проверь квоту: <https://makersuite.google.com/>
 
 ---
 
@@ -144,7 +152,7 @@ docker-compose up -d marketplace-listener
 
 ```bash
 # Статус
-docker-compose ps
+docker-compose ps  # status должен быть "healthy" для listener
 
 # Логи listener
 docker-compose logs -f marketplace-listener
@@ -161,9 +169,10 @@ docker-compose build --no-cache
 
 ---
 
-## 🎉 Готово!
+## 🎉 Готово
 
 Теперь бот:
+
 - ✅ Собирает сообщения из 200 каналов 24/7
 - ✅ Обрабатывает и отбирает лучшие новости через Gemini
 - ✅ Публикует в два канала: Ozon и Wildberries

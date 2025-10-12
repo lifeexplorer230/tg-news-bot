@@ -1,9 +1,9 @@
 """Загрузка конфигурации из YAML и .env"""
 import os
+from typing import Any
+
 import yaml
-from pathlib import Path
 from dotenv import load_dotenv
-from typing import Dict, Any
 
 
 class Config:
@@ -21,16 +21,16 @@ class Config:
         load_dotenv(env_path)
 
         # Загружаем config.yaml
-        with open(config_path, 'r', encoding='utf-8') as f:
-            self.config: Dict[str, Any] = yaml.safe_load(f)
+        with open(config_path, encoding="utf-8") as f:
+            self.config: dict[str, Any] = yaml.safe_load(f)
 
         # API ключи из .env
-        self.telegram_api_id = int(os.getenv('TELEGRAM_API_ID'))
-        self.telegram_api_hash = os.getenv('TELEGRAM_API_HASH')
-        self.telegram_phone = os.getenv('TELEGRAM_PHONE', '')
-        self.my_channel = os.getenv('MY_CHANNEL', '')
-        self.my_personal_account = os.getenv('MY_PERSONAL_ACCOUNT', '')
-        self.gemini_api_key = os.getenv('GEMINI_API_KEY')
+        self.telegram_api_id = int(os.getenv("TELEGRAM_API_ID"))
+        self.telegram_api_hash = os.getenv("TELEGRAM_API_HASH")
+        self.telegram_phone = os.getenv("TELEGRAM_PHONE", "")
+        self.my_channel = os.getenv("MY_CHANNEL", "")
+        self.my_personal_account = os.getenv("MY_PERSONAL_ACCOUNT", "")
+        self.gemini_api_key = os.getenv("GEMINI_API_KEY")
 
     def get(self, key_path: str, default: Any = None) -> Any:
         """
@@ -43,7 +43,7 @@ class Config:
         Returns:
             Значение из конфига или default
         """
-        keys = key_path.split('.')
+        keys = key_path.split(".")
         value = self.config
 
         for key in keys:
@@ -57,17 +57,33 @@ class Config:
     @property
     def db_path(self) -> str:
         """Путь к базе данных"""
-        return self.get('database.path', './data/news.db')
+        return self.get("database.path", "./data/news.db")
 
     @property
     def log_file(self) -> str:
         """Путь к файлу логов"""
-        return self.get('logging.file', './logs/bot.log')
+        return self.get("logging.file", "./logs/bot.log")
 
     @property
     def log_level(self) -> str:
         """Уровень логирования"""
-        return self.get('logging.level', 'INFO')
+        return self.get("logging.level", "INFO")
+
+    @property
+    def log_format(self) -> str:
+        """Формат сообщений логирования"""
+        return self.get("logging.format", "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
+    @property
+    def log_date_format(self) -> str:
+        """Формат даты в логах"""
+        return self.get("logging.datefmt", "%Y-%m-%d %H:%M:%S")
+
+    @property
+    def log_rotation(self) -> dict[str, Any]:
+        """Настройки rotate для логов"""
+        value = self.get("logging.rotate", {})
+        return value or {}
 
 
 # Глобальный экземпляр конфига

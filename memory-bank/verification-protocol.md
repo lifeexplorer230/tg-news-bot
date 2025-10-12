@@ -1,4 +1,5 @@
 # ✅ VERIFICATION PROTOCOL
+
 ## Протокол проверок для каждого изменения
 
 **Версия:** 1.0
@@ -39,6 +40,7 @@ git status
 ```
 
 ✅ **Критерий:**
+
 - Изменено ≤150 строк (safe zone)
 - Нет случайных изменений
 - Нет debug кода
@@ -47,7 +49,7 @@ git status
 
 ### 3. Функциональная проверка
 
-#### Для изменений в database/db.py:
+#### Для изменений в database/db.py
 
 ```bash
 python -c "
@@ -62,7 +64,7 @@ db.close()
 "
 ```
 
-#### Для изменений в marketplace_processor.py:
+#### Для изменений в marketplace_processor.py
 
 ```bash
 python -c "
@@ -75,7 +77,7 @@ print('✅ MarketplaceProcessor инициализирован')
 "
 ```
 
-#### Для изменений в gemini_client.py:
+#### Для изменений в gemini_client.py
 
 ```bash
 python -c "
@@ -86,7 +88,7 @@ print('✅ GeminiClient импортирован')
 "
 ```
 
-#### Для изменений в config.yaml:
+#### Для изменений в config.yaml
 
 ```bash
 python -c "
@@ -94,7 +96,12 @@ from utils.config import load_config
 
 config = load_config()
 print('✅ Config загружен')
-print(f'Каналов: {len(config.get(\"channels\", {}))}')
+marketplaces = config.get('marketplaces', [])
+if isinstance(marketplaces, dict):
+    marketplaces_count = len(marketplaces)
+else:
+    marketplaces_count = len(marketplaces or [])
+print(f'Маркетплейсов: {marketplaces_count}')
 "
 ```
 

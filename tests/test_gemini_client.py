@@ -33,7 +33,9 @@ def gemini_client(monkeypatch):
             return DummyResponse(outcome)
 
     monkeypatch.setattr(gemini_module.genai, "configure", lambda api_key: None)
-    monkeypatch.setattr(gemini_module.genai, "GenerativeModel", lambda model_name: FakeModel(model_name))
+    monkeypatch.setattr(
+        gemini_module.genai, "GenerativeModel", lambda model_name: FakeModel(model_name)
+    )
 
     client = gemini_module.GeminiClient(api_key="fake-key", model_name="gemini-mock")
     client._log_api_call = lambda *args, **kwargs: None  # не засоряем вывод логами
@@ -64,7 +66,7 @@ def test_select_top_news_parses_markdown_json(gemini_client):
 
 def test_select_top_news_finds_json_inside_text(gemini_client):
     client, responses = gemini_client
-    responses.append("Вот список:\n[\n  {\"id\": 3, \"score\": 6, \"reason\": \"Средняя\"}\n]\n")
+    responses.append('Вот список:\n[\n  {"id": 3, "score": 6, "reason": "Средняя"}\n]\n')
     messages = [
         {"id": 3, "text": "Новость 3", "channel_username": "ai_news"},
     ]

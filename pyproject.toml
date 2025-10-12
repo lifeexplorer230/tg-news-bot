@@ -60,3 +60,10 @@ exclude_lines = [
     "if TYPE_CHECKING:",
     "@abstractmethod",
 ]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+combine_as_imports = true
+known_first_party = ["database", "services", "utils"]
+skip = ["data", "logs", "snapshot", ".venv", "venv", "htmlcov"]
