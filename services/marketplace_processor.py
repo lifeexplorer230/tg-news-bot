@@ -407,10 +407,144 @@ class MarketplaceProcessor:
 
         logger.info("✅ Обработка всех категорий завершена!")
 
+    async def _wait_for_moderation_response_retry(
+        self, conv, total_posts: int
+    ) -> list[int] | None:
+        """
+        Повторное ожидание ответа модератора (после некорректного ввода)
+
+        Args:
+            conv: Conversation объект
+            total_posts: Общее количество новостей
+
+        Returns:
+            Список номеров для исключения или None если отмена
+        """
+        try:
+            response = await conv.get_response(timeout=float('inf'))
+            response_text = response.message.strip().lower()
+
+            logger.info(f"📨 Получен повторный ответ модератора: {response_text}")
+
+            # Обработка команды отмены
+            if response_text in ["отмена", "cancel"]:
+                await conv.send_message("❌ Модерация отменена")
+                return None
+
+            # Обработка команды "опубликовать все"
+            if response_text in ["0", "все", "all"]:
+                await conv.send_message(f"✅ Все {total_posts} новостей будут опубликованы")
+                return []
+
+            # Парсинг номеров
+            excluded_ids = []
+            parts = response_text.split()
+
+            for part in parts:
+                part = part.strip(",.")
+                if part.isdigit():
+                    num = int(part)
+                    if 1 <= num <= total_posts:
+                        excluded_ids.append(num)
+                    else:
+                        logger.warning(f"Номер {num} вне диапазона 1-{total_posts}")
+
+            if not excluded_ids:
+                await conv.send_message(
+                    "⚠️ Не удалось распознать номера. "
+                    "Отправь номера через пробел (например: 1 2 3 5 6)"
+                )
+                # Рекурсивно ждем правильного ответа
+                return await self._wait_for_moderation_response_retry(conv, total_posts)
+
+            await conv.send_message(
+                f"✅ Исключено {len(excluded_ids)} новостей: {', '.join(map(str, excluded_ids))}\n"
+                f"Будет опубликовано: {total_posts - len(excluded_ids)} новостей"
+            )
+            return excluded_ids
+
+        except Exception as e:
+            logger.error(f"Ошибка при повторном ожидании ответа: {e}", exc_info=True)
+            return None
+
+    async def _wait_for_moderation_response(
+        self, client: TelegramClient, personal_account: str, message: str, total_posts: int
+    ) -> list[int] | None:
+        """
+        Ожидание ответа модератора (без таймаута)
+
+        Args:
+            client: Telegram клиент
+            personal_account: Username модератора
+            message: Сообщение для модерации
+            total_posts: Общее количество новостей
+
+        Returns:
+            Список номеров для исключения или None если отмена
+        """
+        logger.info("⏳ Отправка на модерацию и ожидание ответа...")
+
+        # Используем conversation API для отправки и ожидания ответа
+        async with client.conversation(personal_account) as conv:
+            try:
+                # Отправляем сообщение модерации
+                await conv.send_message(message)
+                logger.info(f"✅ Сообщение отправлено модератору {personal_account}")
+
+                # Ждем ответа (бесконечное ожидание)
+                response = await conv.get_response(timeout=float('inf'))
+                response_text = response.message.strip().lower()
+
+                logger.info(f"📨 Получен ответ модератора: {response_text}")
+
+                # Обработка команды отмены
+                if response_text in ["отмена", "cancel"]:
+                    await conv.send_message("❌ Модерация отменена")
+                    return None
+
+                # Обработка команды "опубликовать все"
+                if response_text in ["0", "все", "all"]:
+                    await conv.send_message(f"✅ Все {total_posts} новостей будут опубликованы")
+                    return []
+
+                # Парсинг номеров
+                excluded_ids = []
+                parts = response_text.split()
+
+                for part in parts:
+                    # Удаляем возможные символы типа запятых
+                    part = part.strip(",.")
+                    if part.isdigit():
+                        num = int(part)
+                        if 1 <= num <= total_posts:
+                            excluded_ids.append(num)
+                        else:
+                            logger.warning(f"Номер {num} вне диапазона 1-{total_posts}")
+
+                if not excluded_ids:
+                    await conv.send_message(
+                        "⚠️ Не удалось распознать номера. "
+                        "Отправь номера через пробел (например: 1 2 3 5 6)"
+                    )
+                    # Рекурсивно ждем правильного ответа (без повторной отправки message)
+                    return await self._wait_for_moderation_response_retry(
+                        conv, total_posts
+                    )
+
+                await conv.send_message(
+                    f"✅ Исключено {len(excluded_ids)} новостей: {', '.join(map(str, excluded_ids))}\n"
+                    f"Будет опубликовано: {total_posts - len(excluded_ids)} новостей"
+                )
+                return excluded_ids
+
+            except Exception as e:
+                logger.error(f"Ошибка при ожидании ответа модератора: {e}", exc_info=True)
+                return None
+
     async def moderate_categories(
         self, client: TelegramClient, categories: dict[str, list[dict]]
     ) -> list[dict]:
-        """Интерактивная модерация: выбор 10 из 15 новостей (по категориям)"""
+        """Интерактивная модерация: исключение 5 из 15 новостей (по категориям)"""
 
         # Объединяем все новости из 3 категорий
         all_posts = []
@@ -422,7 +556,7 @@ class MarketplaceProcessor:
                 all_posts.append(post)
 
         total = len(all_posts)
-        logger.info(f"📋 Отправка {total} новостей на модерацию (нужно выбрать 10)")
+        logger.info(f"📋 Отправка {total} новостей на модерацию (нужно исключить 5)")
 
         # Присваиваем ID для модерации
         for idx, post in enumerate(all_posts, 1):
@@ -431,17 +565,24 @@ class MarketplaceProcessor:
         # Формируем сообщение для модерации
         message = self._format_categories_moderation_message(categories)
 
-        # Отправляем в личку
+        # Отправляем в личку и ждем ответа
         personal_account = self.config.my_personal_account
-        await client.send_message(personal_account, message)
+        excluded_ids = await self._wait_for_moderation_response(
+            client, personal_account, message, total
+        )
 
-        logger.info(f"✅ Сообщение для модерации отправлено в {personal_account}")
+        if excluded_ids is None:
+            # Модератор отменил модерацию
+            logger.warning("Модерация отменена модератором")
+            return []
 
-        # TODO: Здесь можно добавить логику ожидания ответа от модератора
-        # Пока возвращаем первые 10 (автоматический отбор)
-        # Сортируем по score и берем топ-10
-        sorted_posts = sorted(all_posts, key=lambda x: x.get("score", 0), reverse=True)
-        return sorted_posts[:10]
+        # Фильтруем посты - исключаем выбранные номера
+        approved_posts = [post for post in all_posts if post["moderation_id"] not in excluded_ids]
+
+        logger.info(
+            f"✅ Модерация завершена: исключено {len(excluded_ids)}, одобрено {len(approved_posts)}"
+        )
+        return approved_posts
 
     def _format_categories_moderation_message(self, categories: dict[str, list[dict]]) -> str:
         """Форматирование сообщения для модерации 3-категорийной системы"""
@@ -502,9 +643,10 @@ class MarketplaceProcessor:
         lines.append("=" * 50)
         lines.append(f"📊 **Всего:** {idx-1} новостей\n")
         lines.append("**Инструкция:**")
-        lines.append("Отправь номера для **ПУБЛИКАЦИИ** через пробел (10 штук)")
-        lines.append("Например: `1 2 3 5 6 8 9 11 13 14`\n")
-        lines.append("Или отправь `топ10` чтобы взять 10 лучших по оценке автоматически")
+        lines.append("Отправь номера которые **ИСКЛЮЧИТЬ из ПУБЛИКАЦИИ** через пробел (5 штук)")
+        lines.append("Например: `1 2 3 5 6` - исключит новости 1, 2, 3, 5, 6\n")
+        lines.append("Или отправь `0` или `все` чтобы опубликовать ВСЕ 15 новостей")
+        lines.append("Или отправь `отмена` чтобы отменить модерацию")
 
         return "\n".join(lines)
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pickle  # nosec B403
 import sqlite3
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -13,6 +14,25 @@ from utils.logger import setup_logger
 from utils.timezone import now_msk
 
 logger = setup_logger(__name__)
+
+
+def retry_on_locked(func):
+    """Декоратор для повторных попыток при блокировке БД"""
+    def wrapper(*args, **kwargs):
+        max_retries = 5
+        retry_delay = 0.5  # секунд
+
+        for attempt in range(max_retries):
+            try:
+                return func(*args, **kwargs)
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e) and attempt < max_retries - 1:
+                    logger.warning(f"БД заблокирована, попытка {attempt + 1}/{max_retries}")
+                    time.sleep(retry_delay * (attempt + 1))  # Экспоненциальная задержка
+                    continue
+                raise
+        return None
+    return wrapper
 
 
 class Database:
@@ -32,8 +52,10 @@ class Database:
 
     def connect(self):
         """Подключение к базе данных"""
-        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        # Увеличенный timeout для работы с параллельным доступом
+        self.conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA busy_timeout=30000")  # 30 секунд
         self.conn.row_factory = sqlite3.Row  # Для доступа по именам столбцов
         return self.conn
 
@@ -133,6 +155,7 @@ class Database:
 
     # ====== РАБОТА С КАНАЛАМИ ======
 
+    @retry_on_locked
     def add_channel(self, username: str, title: str = "") -> int:
         """
         Добавить канал в базу
@@ -175,6 +198,7 @@ class Database:
 
     # ====== РАБОТА С СООБЩЕНИЯМИ ======
 
+    @retry_on_locked
     def save_message(
         self, channel_id: int, message_id: int, text: str, date: datetime, has_media: bool = False
     ) -> int | None:
@@ -235,6 +259,7 @@ class Database:
 
         return [dict(row) for row in cursor.fetchall()]
 
+    @retry_on_locked
     def mark_as_processed(
         self,
         message_id: int,
@@ -267,6 +292,7 @@ class Database:
 
     # ====== РАБОТА С ОПУБЛИКОВАННЫМИ ПОСТАМИ ======
 
+    @retry_on_locked
     def save_published(
         self, text: str, embedding: np.ndarray, source_message_id: int, source_channel_id: int
     ) -> int:
@@ -364,6 +390,7 @@ class Database:
 
     # ====== ОЧИСТКА ======
 
+    @retry_on_locked
     def cleanup_old_data(self, raw_days: int = 14, published_days: int = 60):
         """
         Удалить старые данные
