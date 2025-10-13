@@ -1,8 +1,8 @@
 # 🛒 Marketplace News Bot
 
-**Version 2.1.0** | ✅ Production Ready
+**Версия 3.0** | ✅ Production Ready
 
-Автоматический агрегатор новостей про маркетплейсы Ozon и Wildberries из Telegram каналов.
+Автоматический агрегатор новостей про маркетплейсы Ozon и Wildberries из Telegram‑каналов. Начиная с 3.x ядро поддерживает профильную конфигурацию (marketplace, ai и т.д.), поэтому один и тот же код можно запускать под разные сценарии.
 
 ## 🎯 Возможности
 
@@ -52,21 +52,43 @@ OZON_CHANNEL=@your_ozon_channel
 WB_CHANNEL=@your_wb_channel
 ```
 
-### 2. Настройка config.yaml
+### 2. Настройка профилей конфигурации
 
-Отредактируй `config.yaml`:
+Конфигурация разделена на базовую (`config/base.yaml`) и профили (`config/profiles/*.yaml`).
+
+1. `config/base.yaml` — общие параметры (пути, ретраи БД, публикация, расписание, статус‑репорт).
+2. `config/profiles/marketplace.yaml` — профиль маркетплейсов (каналы, токен статуса, ключевые слова и т.п.).
+
+Пример ключевых блоков профиля:
 
 ```yaml
+publication:
+  channel: "@your_digest_channel"
+  preview_channel: "@your_preview_channel"
+  header_template: "📌 Главные новости маркетплейсов за {date}"
+  footer_template: "____________________________________\nПодпишись, чтобы быть в курсе: {channel}"
+  notify_account: "@your_username"
+
+listener:
+  mode: subscriptions
+  channel_blacklist:
+    - spamads
+
+status:
+  enabled: true
+  message_template: |
+    🤖 **{bot_name} - Статус на {time}**
+    📅 Дата: {date}
+    📊 Собрано: {messages_today}, опубликовано: {published_today}
+    ✅ Бот работает нормально
+
 marketplaces:
   - name: "ozon"
-    target_channel: "@your_ozon_channel"  # Замени на свой
-
+    target_channel: "@your_ozon_channel"
+    keywords: ["ozon", "озон"]
   - name: "wildberries"
-    target_channel: "@your_wb_channel"    # Замени на свой
-
-channels:
-  all_digest:
-    target_channel: "@your_digest_channel"  # Опционально: общий дайджест
+    target_channel: "@your_wb_channel"
+    keywords: ["wb", "wildberries", "вб"]
 ```
 
 ### 3. Первый запуск (настройка Telegram)
@@ -91,14 +113,17 @@ docker-compose up -d marketplace-listener
 docker-compose logs -f marketplace-listener
 ```
 
-### 5. Обработка новостей
+### 5. Обработка новостей и выбор профиля
 
 ```bash
-# Запускаем processor вручную
+# Запускаем processor вручную (профиль marketplace по умолчанию)
 docker-compose run --rm marketplace-processor python main.py processor
 
-# Или добавь в cron (раз в день в 09:00)
-0 9 * * * cd /root/marketplace-news-bot && docker-compose run --rm marketplace-processor python main.py processor
+# Запускаем с конкретным профилем (например, ai)
+docker-compose run --rm marketplace-processor python main.py processor --profile ai
+
+# Cron (пример): раз в день в 09:00 с профилем marketplace
+0 9 * * * cd /root/marketplace-news-bot && docker-compose run --rm marketplace-processor python main.py processor >> logs/cron.log 2>&1
 ```
 
 ---
@@ -107,7 +132,11 @@ docker-compose run --rm marketplace-processor python main.py processor
 
 ```
 marketplace-news-bot/
-├── config.yaml              # Главная конфигурация
+├── config/
+│   ├── base.yaml            # Общие настройки (пути, публикация, retry)
+│   └── profiles/
+│       ├── marketplace.yaml # Профиль маркетплейсов
+│       └── ai.yaml          # Профиль AI-дайджеста
 ├── .env                     # Секретные ключи (не коммитится)
 ├── docker-compose.yml       # Docker конфигурация
 ├── Dockerfile               # Docker образ
@@ -119,8 +148,9 @@ marketplace-news-bot/
 │
 ├── services/
 │   ├── telegram_listener.py        # Слушатель каналов
-│   ├── marketplace_processor.py    # Обработчик новостей
-│   ├── gemini_client.py            # Клиент Gemini AI
+│   ├── marketplace_processor.py    # Обработчик новостей (учитывает профили)
+│   ├── gemini_client.py            # Клиент Gemini AI, читает промпты из config/prompts/
+│   ├── status_reporter.py          # Часовые статус-репорты
 │   └── embeddings.py               # Проверка дубликатов
 │
 ├── utils/

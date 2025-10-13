@@ -26,9 +26,10 @@ class StatusReporter:
             "status.timezone", config.get("processor.timezone", "Europe/Moscow")
         )
         self.timezone = get_timezone(self.timezone_name)
-        self.db = db or Database(config.db_path, self.timezone_name)
+        self.db = db or Database(config.db_path, **config.database_settings())
         self.status_chat = config.get("status.chat", "Soft Status")
         self.bot_name = config.get("status.bot_name", "Marketplace News Bot")
+        self.message_template = config.get("status.message_template", "")
 
     async def send_status(self):
         """Отправить статус в группу"""
@@ -41,16 +42,29 @@ class StatusReporter:
             time_str = now.strftime("%H:%M:%S")
             date_str = now.strftime("%d.%m.%Y")
 
-            message = f"🤖 **{self.bot_name} - Статус на {time_str}**\n\n"
-            message += f"📅 Дата: {date_str}\n\n"
-            message += "📊 **Статистика за сегодня:**\n"
-            message += f"   📥 Собрано новостей: {stats['messages_today']}\n"
-            message += f"   ✅ Обработано: {stats['processed_today']}\n"
-            message += f"   📝 Опубликовано: {stats['published_today']}\n"
-            message += f"   ⏳ В очереди: {stats['unprocessed']}\n\n"
-            message += "📈 **Каналы:**\n"
-            message += f"   🔗 Активных каналов: {stats['active_channels']}\n\n"
-            message += "✅ Бот работает нормально"
+            context = {
+                "bot_name": self.bot_name,
+                "date": date_str,
+                "time": time_str,
+                "timezone": self.timezone_name,
+                "messages_today": stats.get("messages_today", 0),
+                "processed_today": stats.get("processed_today", 0),
+                "published_today": stats.get("published_today", 0),
+                "unprocessed": stats.get("unprocessed", 0),
+                "active_channels": stats.get("active_channels", 0),
+                "total_messages": stats.get("total_messages", 0),
+                "total_published": stats.get("total_published", 0),
+            }
+
+            template = (self.message_template or "").strip()
+            if template:
+                try:
+                    message = template.format(**context)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Не удалось подставить параметры в status.message_template: %s", exc)
+                    message = self._build_default_message(context)
+            else:
+                message = self._build_default_message(context)
 
             # Проверяем наличие bot_token для избежания конфликтов сессий
             bot_token = self.config.get("status.bot_token", "").strip()
@@ -90,6 +104,22 @@ class StatusReporter:
         finally:
             if self._owns_db:
                 self.db.close()
+
+    @staticmethod
+    def _build_default_message(context: dict) -> str:
+        message = (
+            f"🤖 **{context['bot_name']} - Статус на {context['time']}**\n\n"
+            f"📅 Дата: {context['date']}\n\n"
+            "📊 **Статистика за сегодня:**\n"
+            f"   📥 Собрано новостей: {context['messages_today']}\n"
+            f"   ✅ Обработано: {context['processed_today']}\n"
+            f"   📝 Опубликовано: {context['published_today']}\n"
+            f"   ⏳ В очереди: {context['unprocessed']}\n\n"
+            "📈 **Каналы:**\n"
+            f"   🔗 Активных каналов: {context['active_channels']}\n\n"
+            "✅ Бот работает нормально"
+        )
+        return message
 
 
 async def run_status_reporter(config, db=None):

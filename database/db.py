@@ -18,27 +18,45 @@ logger = setup_logger(__name__)
 
 def retry_on_locked(func):
     """Декоратор для повторных попыток при блокировке БД"""
-    def wrapper(*args, **kwargs):
-        max_retries = 5
-        retry_delay = 0.5  # секунд
+
+    def wrapper(self, *args, **kwargs):
+        max_retries = getattr(self, "_retry_max_attempts", 5)
+        base_delay = getattr(self, "_retry_base_delay", 0.5)
+        multiplier = getattr(self, "_retry_backoff_multiplier", 1.0)
 
         for attempt in range(max_retries):
             try:
-                return func(*args, **kwargs)
+                return func(self, *args, **kwargs)
             except sqlite3.OperationalError as e:
                 if "database is locked" in str(e) and attempt < max_retries - 1:
-                    logger.warning(f"БД заблокирована, попытка {attempt + 1}/{max_retries}")
-                    time.sleep(retry_delay * (attempt + 1))  # Экспоненциальная задержка
+                    delay = base_delay * (attempt + 1) * multiplier
+                    logger.warning(
+                        "БД заблокирована, попытка %s/%s, повтор через %.2f c",
+                        attempt + 1,
+                        max_retries,
+                        delay,
+                    )
+                    time.sleep(delay)
                     continue
                 raise
         return None
+
     return wrapper
 
 
 class Database:
     """Класс для работы с SQLite базой данных"""
 
-    def __init__(self, db_path: str):
+    def __init__(
+        self,
+        db_path: str,
+        *,
+        timeout: float = 30.0,
+        busy_timeout_ms: int = 30000,
+        retry_max_attempts: int = 5,
+        retry_base_delay: float = 0.5,
+        retry_backoff_multiplier: float = 1.0,
+    ):
         """
         Инициализация базы данных
 
@@ -46,6 +64,11 @@ class Database:
             db_path: Путь к файлу базы данных
         """
         self.db_path = db_path
+        self._timeout = float(timeout)
+        self._busy_timeout_ms = int(busy_timeout_ms)
+        self._retry_max_attempts = max(1, int(retry_max_attempts))
+        self._retry_base_delay = max(0.0, float(retry_base_delay))
+        self._retry_backoff_multiplier = max(0.0, float(retry_backoff_multiplier)) or 1.0
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.conn: sqlite3.Connection | None = None
         self.init_db()
@@ -53,9 +76,9 @@ class Database:
     def connect(self):
         """Подключение к базе данных"""
         # Увеличенный timeout для работы с параллельным доступом
-        self.conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
+        self.conn = sqlite3.connect(self.db_path, timeout=self._timeout, check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA busy_timeout=30000")  # 30 секунд
+        self.conn.execute(f"PRAGMA busy_timeout={self._busy_timeout_ms}")
         self.conn.row_factory = sqlite3.Row  # Для доступа по именам столбцов
         return self.conn
 
