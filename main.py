@@ -5,9 +5,11 @@ Marketplace News Bot - автоматический агрегатор ново�
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
 import contextlib
 import logging
+import os
 import signal
 import sys
 import threading
@@ -27,6 +29,23 @@ logger = get_logger(__name__)
 # Глобальная переменная для graceful shutdown
 running = True
 _shutdown_events: list[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = []
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Marketplace News Bot")
+    parser.add_argument(
+        "mode",
+        nargs="?",
+        choices=["listener", "processor", "all"],
+        default="all",
+        help="Режим работы бота",
+    )
+    parser.add_argument(
+        "--profile",
+        dest="profile",
+        help="Имя профиля конфигурации (например, marketplace или ai)",
+    )
+    return parser.parse_args(argv)
 
 
 def register_shutdown_event(
@@ -70,7 +89,7 @@ async def run_listener_mode(config: Config | None = None):
     logger.info("=" * 80)
 
     # Инициализация БД
-    db = Database(config.db_path)
+    db = Database(config.db_path, **config.database_settings())
 
     listener = TelegramListener(config, db)
     shutdown_event = asyncio.Event()
@@ -211,21 +230,14 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    # Проверяем режим запуска
-    mode = sys.argv[1] if len(sys.argv) > 1 else "all"
+    args = parse_args(sys.argv[1:])
+    mode = args.mode
 
-    if mode not in ["listener", "processor", "all"]:
-        logger.error(
-            "Usage: python main.py [listener|processor|all]\n\n"
-            "Modes:\n"
-            "  listener  - Слушает Telegram каналы и сохраняет сообщения\n"
-            "  processor - Обрабатывает сообщения, отбирает новости и публикует (одноразово)\n"
-            "  all       - Listener + scheduled processor + status reporter (по умолчанию)"
-        )
-        sys.exit(1)
+    if args.profile:
+        os.environ["PROFILE"] = args.profile
 
     # Загружаем конфигурацию
-    config = load_config()
+    config = load_config(profile=args.profile)
     configure_logging(
         level=config.log_level,
         log_file=config.log_file,
@@ -238,7 +250,7 @@ def main():
     logger.info("=" * 80)
     logger.info("🚀 MARKETPLACE NEWS BOT")
     logger.info("=" * 80)
-    db = Database(config.db_path)
+    db = Database(config.db_path, **config.database_settings())
 
     try:
         if mode == "listener":

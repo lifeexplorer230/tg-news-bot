@@ -1,0 +1,140 @@
+# Базовые настройки универсального дайджест-бота
+# Профильные файлы дополняют/переопределяют эти значения.
+
+profile: marketplace
+
+paths:
+  data_dir: ./data
+  logs_dir: ./logs
+  sessions_dir: ./sessions
+  snapshots_dir: ./snapshot
+  db_file_pattern: "{data_dir}/{profile}.db"
+  log_file_pattern: "{logs_dir}/{profile}.log"
+  session_file_pattern: "{sessions_dir}/{profile}.session"
+
+database:
+  timeout_seconds: 30.0
+  busy_timeout_ms: 30000
+  retry:
+    max_attempts: 5
+    base_delay_seconds: 0.5
+    backoff_multiplier: 1.0
+
+telegram:
+  session_name: null  # переопределяется профилем
+
+publication:
+  channel: ""
+  preview_channel: ""
+  header_template: "📌 Главные новости мира маркетплейсов за {date}"
+  footer_template: "____________________________________\nПодпишись, чтобы быть в курсе: {channel}"
+  notify_account: ""
+
+llm:
+  provider: gemini
+
+gemini:
+  model: gemini-2.0-flash-exp
+  max_tokens: 2048
+  temperature: 0.7
+  prompts:
+    select_top_news: prompts/marketplace_select_top.md
+    select_and_format_news: prompts/marketplace_select_and_format.md
+    select_three_categories: prompts/marketplace_three_categories.md
+    select_and_format_marketplace_news: prompts/marketplace_select_marketplace.md
+    format_news_post: prompts/marketplace_format_post.md
+
+listener:
+  mode: subscriptions        # subscriptions | manual
+  reconnect_timeout: 30
+  save_batch_size: 1
+  min_message_length: 50
+  channel_whitelist: []
+  channel_blacklist: []
+  manual_channels: []
+  healthcheck:
+    heartbeat_path: "{logs_dir}/listener.heartbeat"
+    interval_seconds: 60
+    max_age_seconds: 180
+
+filters:
+  exclude_keywords: []
+  include_keywords: []
+
+processor:
+  schedule_time: "09:00"
+  timezone: Europe/Moscow
+  duplicate_threshold: 0.85
+  top_n: 10
+  exclude_count: 5
+
+embeddings:
+  model: paraphrase-multilingual-MiniLM-L12-v2
+  local_path: ./models/paraphrase-multilingual-MiniLM-L12-v2
+  enable_fallback: true
+  allow_remote_download: false
+
+moderation:
+  enabled: true
+  timeout_hours: 2
+  instructions_template: default
+  cancel_keywords:
+    - отмена
+    - cancel
+  publish_all_keywords:
+    - 0
+    - все
+    - all
+  exclude_keywords:
+    - исключить
+  message:
+    title_template: "📋 **МОДЕРАЦИЯ: {context}**"
+    intro_template: "_(Отсортировано по важности)_"
+    footer_template: "Отправь номера для УДАЛЕНИЯ через пробел"
+
+cleanup:
+  raw_messages_days: 14
+  published_days: 60
+  run_weekly: true
+
+status:
+  enabled: false
+  chat: Soft Status
+  bot_name: Universal Digest Bot
+  interval_minutes: 60
+  bot_token: ""
+  timezone: Europe/Moscow
+  message_template: |
+    🤖 **{bot_name} - Статус на {time}**
+
+    📅 Дата: {date}
+
+    📊 **Статистика за сегодня:**
+      📥 Собрано новостей: {messages_today}
+      ✅ Обработано: {processed_today}
+      📝 Опубликовано: {published_today}
+      ⏳ В очереди: {unprocessed}
+
+    📈 **Каналы:**
+      🔗 Активных каналов: {active_channels}
+
+    ✅ Бот работает нормально
+
+logging:
+  level: INFO
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  datefmt: '%Y-%m-%d %H:%M:%S'
+  file: '{logs_dir}/bot.log'
+  rotate:
+    enabled: true
+    max_bytes: 10485760
+    backup_count: 5
+
+features:
+  status_report: true
+  cleanup: true
+  embeddings_local_download: false
+
+alerts:
+  enabled: false
+  chat: ""

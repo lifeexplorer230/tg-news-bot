@@ -47,6 +47,30 @@ class TelegramListener:
         self._channel_id_set = set()
         self.channel_whitelist = {self._normalize_channel(value) for value in whitelist if value}
         self.channel_blacklist = {self._normalize_channel(value) for value in blacklist if value}
+        self.mode = str(config.get("listener.mode", "subscriptions")).lower()
+        if self.mode not in {"subscriptions", "manual"}:
+            logger.warning(
+                "Неизвестный режим listener '%s', переключаемся на subscriptions",
+                self.mode,
+            )
+            self.mode = "subscriptions"
+
+        manual_channels = config.get("listener.manual_channels", []) or []
+        self.manual_channels: list[str] = []
+        seen_manual: set[str] = set()
+        for raw_value in manual_channels:
+            if raw_value is None:
+                continue
+            value = str(raw_value).strip()
+            if value.startswith("@"):
+                value = value[1:]
+            if not value:
+                continue
+            lower = value.lower()
+            if lower in seen_manual:
+                continue
+            seen_manual.add(lower)
+            self.manual_channels.append(value)
         self.heartbeat_path = Path(
             self.config.get(
                 "listener.healthcheck.heartbeat_path",
@@ -70,6 +94,11 @@ class TelegramListener:
         # Загружаем каналы из подписок
         await self.load_channels()
 
+        if not self.channel_ids:
+            raise RuntimeError(
+                f"Не найдено каналов для прослушивания (mode={self.mode}). Проверьте конфигурацию."
+            )
+
         # Регистрируем обработчик новых сообщений
         @self.client.on(events.NewMessage(chats=self.channel_ids))
         async def handler(event):
@@ -87,7 +116,16 @@ class TelegramListener:
             await self._stop_heartbeat()
 
     async def load_channels(self):
-        """Загрузить каналы из подписок пользователя"""
+        """Загрузить список каналов согласно конфигурации."""
+        self.channel_ids = []
+        self._channel_id_set = set()
+        if self.mode == "manual":
+            await self._load_manual_channels()
+        else:
+            await self._load_subscription_channels()
+
+    async def _load_subscription_channels(self):
+        """Загрузить каналы из подписок пользователя."""
         logger.info("Загрузка каналов из подписок...")
 
         dialogs = await self.client.get_dialogs()
@@ -127,6 +165,72 @@ class TelegramListener:
             logger.info(f"Пропущено каналов по blacklist: {skipped_blacklist}")
         if skipped_not_whitelisted:
             logger.info(f"Пропущено каналов вне whitelist: {skipped_not_whitelisted}")
+
+    async def _load_manual_channels(self):
+        """Загрузить каналы, указанные в конфигурации."""
+        logger.info("Загрузка каналов из конфигурации (manual)...")
+
+        if not self.manual_channels:
+            logger.warning(
+                "listener.manual_channels пуст — manual режим не сможет принимать сообщения"
+            )
+            return
+
+        channel_count = 0
+        skipped_blacklist = 0
+        skipped_errors = 0
+        skipped_duplicates = 0
+
+        for entry in self.manual_channels:
+            query = entry
+            if entry.isdigit():
+                try:
+                    query = int(entry)
+                except ValueError:
+                    query = entry
+
+            try:
+                entity = await self.client.get_entity(query)
+            except Exception as exc:  # noqa: BLE001
+                skipped_errors += 1
+                logger.error("Не удалось получить канал %s: %s", entry, exc)
+                continue
+
+            if not isinstance(entity, Channel) or not entity.broadcast:
+                skipped_errors += 1
+                logger.warning("Объект %s не является публичным каналом", entry)
+                continue
+
+            username = entity.username or str(entity.id)
+            title = entity.title
+
+            if not self._is_channel_allowed(username, entity.id):
+                identifier = self._normalize_channel(username or entity.id)
+                if identifier in self.channel_blacklist:
+                    skipped_blacklist += 1
+                    logger.debug(f"Канал исключён blacklist: @{username} - {title}")
+                else:
+                    logger.debug(f"Канал не входит в whitelist: @{username} - {title}")
+                continue
+
+            self.db.add_channel(username, title)
+            if entity.id in self._channel_id_set:
+                skipped_duplicates += 1
+                logger.debug(f"Канал уже добавлен ранее: @{username}")
+                continue
+
+            self.channel_ids.append(entity.id)
+            self._channel_id_set.add(entity.id)
+            channel_count += 1
+            logger.info(f"Канал добавлен (manual): @{username} - {title}")
+
+        logger.info(f"Загружено {channel_count} каналов (manual)")
+        if skipped_blacklist:
+            logger.info(f"Пропущено каналов по blacklist: {skipped_blacklist}")
+        if skipped_duplicates:
+            logger.info(f"Пропущено дубликатов: {skipped_duplicates}")
+        if skipped_errors:
+            logger.info(f"Пропущено каналов из-за ошибок: {skipped_errors}")
 
     async def handle_new_message(self, event):
         """

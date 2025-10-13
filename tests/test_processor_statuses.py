@@ -80,6 +80,12 @@ def make_processor(messages, moderation_enabled=False):
         "ozon": 1,
         "general": 1,
     }
+    processor.processor_exclude_count = 5
+    processor.processor_top_n = 10
+    processor.publication_header_template = "TEST HEADER {date}"
+    processor.publication_footer_template = ""
+    processor.publication_preview_channel = ""
+    processor.publication_notify_account = ""
     processor.all_exclude_keywords_lower = {"spam"}
 
     async def fake_filter_duplicates(msgs):

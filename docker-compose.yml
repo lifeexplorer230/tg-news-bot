@@ -5,15 +5,17 @@ services:
   marketplace-listener:
     build: .
     container_name: marketplace-listener
-    command: python main.py listener
+    command: python main.py listener --profile marketplace
     restart: always
     volumes:
     - ./data:/app/data
     - ./logs:/app/logs
-    - ./config.yaml:/app/config.yaml
+    - ./sessions:/app/sessions
+    - ./config:/app/config
     - ./.env:/app/.env
     environment:
     - TZ=Europe/Moscow
+    - PROFILE=marketplace
     - HEARTBEAT_PATH=/app/logs/listener.heartbeat
     - HEARTBEAT_MAX_AGE=180
     healthcheck:
@@ -30,14 +32,16 @@ services:
   # marketplace-processor:
   #   build: .
   #   container_name: marketplace-processor
-  #   command: python main.py processor
+  #   command: python main.py processor --profile marketplace
   #   volumes:
   #     - ./data:/app/data
   #     - ./logs:/app/logs
-  #     - ./config.yaml:/app/config.yaml
+  #     - ./sessions:/app/sessions
+  #     - ./config:/app/config
   #     - ./.env:/app/.env
   #   environment:
   #     - TZ=Europe/Moscow
+  #     - PROFILE=marketplace
   #   networks:
   #     - marketplace-bot
 

@@ -1,0 +1,63 @@
+# Профиль: AI News Digest
+profile: ai
+
+paths:
+  profile: ai
+  data_dir: ./data
+  logs_dir: ./logs
+  sessions_dir: ./sessions
+
+telegram:
+  session_name: ./sessions/ai/session
+
+publication:
+  channel: '@rnpii'
+  footer_template: |
+    _____________________________________
+    Подпишись, чтобы быть в курсе: https://t.me/rnpii
+  header_template: "📌 Главные новости мира ИИ за {date}"
+
+listener:
+  mode: subscriptions
+  min_message_length: 60
+  channel_whitelist: []
+  channel_blacklist: []
+  manual_channels: []
+
+filters:
+  exclude_keywords:
+    - Реклама
+    - Скидка
+    - Промокод
+    - Купить
+    - Заработок
+
+processor:
+  schedule_time: '06:00'
+  timezone: Europe/Moscow
+  duplicate_threshold: 0.85
+  top_n: 10
+  exclude_count: 5
+
+moderation:
+  enabled: true
+  timeout_hours: 2
+
+cleanup:
+  raw_messages_days: 14
+  published_days: 60
+  run_weekly: true
+
+status:
+  enabled: true
+  chat: Soft Status
+  bot_name: AI News Bot
+  interval_minutes: 60
+  bot_token: ''
+  timezone: Europe/Moscow
+
+logging:
+  file: ./logs/ai/bot.log
+
+database:
+  path: ./data/news.db

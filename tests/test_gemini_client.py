@@ -91,6 +91,34 @@ def test_select_top_news_handles_json_error(gemini_client):
     assert result == []
 
 
+def test_select_top_news_uses_custom_prompt(monkeypatch):
+    captured_prompt = {}
+
+    class FakeModel:
+        def __init__(self, model_name: str):
+            self.model_name = model_name
+
+        def generate_content(self, prompt: str):
+            captured_prompt["value"] = prompt
+            return DummyResponse('[{"id": 1, "score": 9, "reason": "custom"}]')
+
+    monkeypatch.setattr(gemini_module.genai, "configure", lambda api_key: None)
+    monkeypatch.setattr(gemini_module.genai, "GenerativeModel", lambda model_name: FakeModel(model_name))
+
+    def loader(key: str) -> str | None:
+        if key == "select_top_news":
+            return "PROMPT {messages_block}"
+        return None
+
+    client = gemini_module.GeminiClient(api_key="key", model_name="model", prompt_loader=loader)
+    client._log_api_call = lambda *args, **kwargs: None
+
+    messages = [{"id": 1, "text": "Новость {про тест}", "channel_username": "ai_news"}]
+    client.select_top_news(messages, top_n=1)
+
+    assert captured_prompt["value"].startswith("PROMPT ")
+
+
 def test_format_news_post_adds_source_link(gemini_client):
     client, responses = gemini_client
     responses.append(json.dumps({"title": "Заголовок", "description": "Описание"}))

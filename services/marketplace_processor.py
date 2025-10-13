@@ -20,7 +20,7 @@ class MarketplaceProcessor:
 
     def __init__(self, config: Config):
         self.config = config
-        self.db = Database(config.db_path)
+        self.db = Database(config.db_path, **config.database_settings())
         self._embedding_service: EmbeddingService | None = None
         self._gemini_client: GeminiClient | None = None
         self._embedding_model_name = config.get(
@@ -87,7 +87,29 @@ class MarketplaceProcessor:
             "general": counts_config.get("general", 5),
         }
 
+        self.publication_header_template = config.get(
+            "publication.header_template",
+            "📌 Главные новости маркетплейсов за {date}",
+        )
+        self.publication_footer_template = config.get("publication.footer_template", "")
+        self.publication_preview_channel = config.get("publication.preview_channel")
+        self.publication_notify_account = config.get("publication.notify_account")
+
         self.duplicate_threshold = config.get("processor.duplicate_threshold", 0.85)
+        self.processor_top_n = config.get("processor.top_n", 10)
+        self.processor_exclude_count = config.get("processor.exclude_count", 5)
+        if not isinstance(self.processor_top_n, int) or self.processor_top_n <= 0:
+            logger.warning(
+                "Некорректное значение processor.top_n=%s, используем 10",
+                self.processor_top_n,
+            )
+            self.processor_top_n = 10
+        if not isinstance(self.processor_exclude_count, int) or self.processor_exclude_count < 0:
+            logger.warning(
+                "Некорректное значение processor.exclude_count=%s, используем 5",
+                self.processor_exclude_count,
+            )
+            self.processor_exclude_count = 5
         self.moderation_enabled = config.get("moderation.enabled", True)
 
     @property
@@ -107,6 +129,7 @@ class MarketplaceProcessor:
             self._gemini_client = GeminiClient(
                 api_key=self.config.gemini_api_key,
                 model_name=self._gemini_model_name,
+                prompt_loader=self.config.load_prompt,
             )
         return self._gemini_client
 
@@ -556,14 +579,19 @@ class MarketplaceProcessor:
                 all_posts.append(post)
 
         total = len(all_posts)
-        logger.info(f"📋 Отправка {total} новостей на модерацию (нужно исключить 5)")
+        exclude_goal = max(0, min(self.processor_exclude_count, total))
+        logger.info(
+            "📋 Отправка %s новостей на модерацию (нужно исключить %s)",
+            total,
+            exclude_goal,
+        )
 
         # Присваиваем ID для модерации
         for idx, post in enumerate(all_posts, 1):
             post["moderation_id"] = idx
 
         # Формируем сообщение для модерации
-        message = self._format_categories_moderation_message(categories)
+        message = self._format_categories_moderation_message(categories, exclude_goal)
 
         # Отправляем в личку и ждем ответа
         personal_account = self.config.my_personal_account
@@ -584,7 +612,9 @@ class MarketplaceProcessor:
         )
         return approved_posts
 
-    def _format_categories_moderation_message(self, categories: dict[str, list[dict]]) -> str:
+    def _format_categories_moderation_message(
+        self, categories: dict[str, list[dict]], exclude_goal: int
+    ) -> str:
         """Форматирование сообщения для модерации 3-категорийной системы"""
 
         number_emojis = {
@@ -606,7 +636,12 @@ class MarketplaceProcessor:
         }
 
         lines = ["📋 **МОДЕРАЦИЯ: ВСЕ КАТЕГОРИИ**"]
-        lines.append("_Нужно выбрать 10 лучших из 15 новостей_\n")
+        if exclude_goal > 0:
+            lines.append(
+                f"_Нужно исключить {exclude_goal} новостей из {sum(len(v) for v in categories.values())}_\n"
+            )
+        else:
+            lines.append("_При необходимости можно исключить новости, отправив их номера_\n")
 
         idx = 1
 
@@ -643,9 +678,15 @@ class MarketplaceProcessor:
         lines.append("=" * 50)
         lines.append(f"📊 **Всего:** {idx-1} новостей\n")
         lines.append("**Инструкция:**")
-        lines.append("Отправь номера которые **ИСКЛЮЧИТЬ из ПУБЛИКАЦИИ** через пробел (5 штук)")
-        lines.append("Например: `1 2 3 5 6` - исключит новости 1, 2, 3, 5, 6\n")
-        lines.append("Или отправь `0` или `все` чтобы опубликовать ВСЕ 15 новостей")
+        if exclude_goal > 0:
+            lines.append(
+                f"Отправь номера которые **ИСКЛЮЧИТЬ из ПУБЛИКАЦИИ** через пробел ({exclude_goal} шт.)"
+            )
+            sample = " ".join(str(i) for i in range(1, min(exclude_goal, 5) + 1))
+            lines.append(f"Например: `{sample}`\n")
+        else:
+            lines.append("При необходимости отправь номера, которые нужно исключить из публикации\n")
+        lines.append("Или отправь `0` или `все` чтобы опубликовать все новости")
         lines.append("Или отправь `отмена` чтобы отменить модерацию")
 
         return "\n".join(lines)
@@ -703,7 +744,23 @@ class MarketplaceProcessor:
         date_str = yesterday.strftime("%d-%m-%Y")
         header_name = display_name or marketplace
 
-        lines = [f"📌 Главные новости {header_name} за {date_str}\n"]
+        context = {
+            "date": date_str,
+            "display_name": header_name,
+            "marketplace": marketplace,
+            "channel": target_channel,
+            "profile": getattr(self.config, "profile", ""),
+        }
+
+        try:
+            header_line = self.publication_header_template.format(**context)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Не удалось подставить параметры в publication.header_template: %s", exc
+            )
+            header_line = f"📌 Главные новости {header_name} за {date_str}"
+
+        lines = [header_line.strip() + "\n"]
 
         number_emojis = {
             1: "1️⃣",
@@ -726,15 +783,40 @@ class MarketplaceProcessor:
             if post.get("source_link"):
                 lines.append(f"{post['source_link']}\n")
 
-        lines.append("_" * 36)
-        lines.append(f"Подпишись на новости {header_name}")
-        lines.append(target_channel)
+        footer = self.publication_footer_template.strip()
+        if footer:
+            try:
+                footer_text = footer.format(**context)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Не удалось подставить параметры в publication.footer_template: %s", exc
+                )
+                footer_text = footer
+            lines.append(footer_text)
 
         digest = "\n".join(lines)
+
+        preview_channel = (self.publication_preview_channel or "").strip()
+        if preview_channel:
+            try:
+                await client.send_message(preview_channel, digest)
+                logger.info("📄 Черновик дайджеста отправлен в %s", preview_channel)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Не удалось отправить превью в %s: %s", preview_channel, exc)
 
         # Публикуем
         await client.send_message(target_channel, digest)
         logger.info(f"✅ Дайджест опубликован в {target_channel}")
+
+        notify_account = (self.publication_notify_account or "").strip()
+        if notify_account:
+            try:
+                await client.send_message(
+                    notify_account,
+                    f"✅ Дайджест на {context['date']} опубликован в {target_channel}",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Не удалось отправить уведомление %s: %s", notify_account, exc)
 
         # Сохраняем embeddings
         for post in posts:

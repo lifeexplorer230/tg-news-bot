@@ -1,0 +1,104 @@
+# Профиль: маркетплейс-дайджест
+profile: marketplace
+
+paths:
+  profile: marketplace
+  data_dir: ./data
+  logs_dir: ./logs
+  sessions_dir: ./sessions
+
+telegram:
+  session_name: ./sessions/marketplace/session
+
+publication:
+  channel: '@rnpozwb'
+  footer_template: |
+    _____________________________________
+    Подпишись, чтобы быть в курсе: https://t.me/rnpozwb
+  header_template: "📌 Главные новости маркетплейсов за {date}"
+
+listener:
+  mode: subscriptions
+  min_message_length: 50
+  channel_whitelist: []
+  channel_blacklist:
+    - spamads
+  manual_channels: []
+
+filters:
+  exclude_keywords:
+    - реклама
+    - курс
+    - промокод
+    - обучение платное
+
+processor:
+  schedule_time: '09:00'
+  timezone: Europe/Moscow
+  duplicate_threshold: 0.85
+  top_n: 10
+  exclude_count: 5
+
+marketplaces:
+  - name: ozon
+    display_name: Ozon
+    enabled: true
+    top_n: 10
+    target_channel: '@rnpozwb'
+    keywords:
+      - ozon
+      - озон
+      - ozon seller
+    exclude_keywords:
+      - реклама
+      - курс
+      - промокод
+      - обучение платное
+  - name: wildberries
+    display_name: Wildberries
+    enabled: true
+    top_n: 10
+    target_channel: '@rnpozwb'
+    keywords:
+      - wildberries
+      - вайлдберриз
+      - вб
+      - wb
+      - wildberries seller
+    exclude_keywords:
+      - реклама
+      - курс
+      - промокод
+      - обучение платное
+
+channels:
+  all_digest:
+    enabled: true
+    target_channel: '@rnpozwb'
+    category_counts:
+      wildberries: 5
+      ozon: 5
+      general: 5
+
+moderation:
+  enabled: true
+  timeout_hours: 2
+
+cleanup:
+  raw_messages_days: 14
+  published_days: 60
+  run_weekly: true
+
+status:
+  enabled: false
+  chat: Soft Status
+  bot_name: Marketplace News Bot
+  interval_minutes: 60
+  bot_token: ''
+  timezone: Europe/Moscow
+
+logging:
+  file: ./logs/marketplace/bot.log
+
+database:
+  path: ./data/marketplace_news.db

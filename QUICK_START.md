@@ -33,19 +33,30 @@ OZON_CHANNEL=@your_ozon_channel
 WB_CHANNEL=@your_wb_channel
 ```
 
-### 2️⃣ Настрой config.yaml
+### 2️⃣ Настрой профили `config/profiles/*.yaml`
 
 ```yaml
+publication:
+  channel: "@your_digest_channel"
+  preview_channel: "@your_preview_channel"
+  header_template: "📌 Главные новости маркетплейсов за {date}"
+  footer_template: "____________________________________\nПодпишись, чтобы быть в курсе: {channel}"
+  notify_account: "@your_username"
+
 marketplaces:
   - name: "ozon"
-    target_channel: "@your_ozон_channel"   # 👈 Замени!
-
+    target_channel: "@your_ozон_channel"
+    keywords: ["ozon", "озон"]
   - name: "wildberries"
-    target_channel: "@your_wb_channel"     # 👈 Замени!
+    target_channel: "@your_wb_channel"
+    keywords: ["wildberries", "вб"]
 
-channels:
-  all_digest:
-    target_channel: "@your_digest_channel" # 👈 Опционально для общего дайджеста
+status:
+  enabled: true
+  message_template: |
+    🤖 **{bot_name} - Статус на {time}**
+    📅 Дата: {date}
+    📊 Собрано: {messages_today}, опубликовано: {published_today}
 ```
 
 ### 3️⃣ Собери Docker образ
@@ -100,14 +111,17 @@ sqlite3 data/marketplace_news.db "SELECT COUNT(*) FROM raw_messages"
 ## 🎯 Первый запуск обработки
 
 ```bash
-# Запусти processor вручную
+# Запусти processor вручную (по умолчанию профиль marketplace)
 docker-compose run --rm marketplace-processor python main.py processor
+
+# Запуск с профилем ai
+docker-compose run --rm marketplace-processor python main.py processor --profile ai
 
 # Что произойдёт:
 # 1. Обработает сообщения за последние 24 часа
-# 2. Отберёт топ-10 для Ozon и Wildberries
-# 3. Отправит на модерацию в твой аккаунт
-# 4. После твоего ответа - опубликует
+# 2. Отберёт новости через Gemini по шаблонам профиля
+# 3. Отправит на модерацию (инструкция из профиля)
+# 4. После ответа модератора опубликует с заданным header/footer и уведомлениями
 ```
 
 ---
