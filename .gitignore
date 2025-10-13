@@ -39,6 +39,15 @@ env/
 # Database
 data/*.db
 data/*.db-journal
+data/
+
+# Backups
+backups/
+
+# Coverage
+.coverage
+htmlcov/
+.pytest_cache/
 
 # Logs (exclude .gitkeep)
 logs/*.log
