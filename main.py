@@ -17,7 +17,6 @@ import time
 
 import schedule
 
-from database.db import Database
 from services.marketplace_processor import MarketplaceProcessor
 from services.status_reporter import run_status_reporter
 from services.telegram_listener import TelegramListener
@@ -88,10 +87,7 @@ async def run_listener_mode(config: Config | None = None):
     logger.info("🎧 ЗАПУСК LISTENER - Marketplace News Bot")
     logger.info("=" * 80)
 
-    # Инициализация БД
-    db = Database(config.db_path, **config.database_settings())
-
-    listener = TelegramListener(config, db)
+    listener = TelegramListener(config)
     shutdown_event = asyncio.Event()
     token = register_shutdown_event(shutdown_event)
 
@@ -119,8 +115,7 @@ async def run_listener_mode(config: Config | None = None):
         if token in _shutdown_events:
             _shutdown_events.remove(token)
         with contextlib.suppress(Exception):
-            await listener.stop()
-        db.close()
+            await listener.stop()  # listener.stop() closes its own db
 
 
 async def run_processor_mode(config: Config | None = None):
@@ -160,7 +155,7 @@ def schedule_processor(config):
     schedule.every().day.at(schedule_time).do(run_processor_sync)
 
 
-def schedule_status_reporter(config, db):
+def schedule_status_reporter(config):
     """Настроить расписание для отправки статуса"""
     if not config.get("status.enabled", False):
         logger.info("📊 Отправка статуса отключена в конфигурации")
@@ -174,7 +169,7 @@ def schedule_status_reporter(config, db):
     def run_status_sync():
         """Синхронная обёртка для отправки статуса"""
         logger.info("📊 Отправка статуса по расписанию...")
-        asyncio.run(run_status_reporter(config, db))
+        asyncio.run(run_status_reporter(config))  # StatusReporter creates own db
 
     schedule.every(interval_minutes).minutes.do(run_status_sync)
 
@@ -189,9 +184,9 @@ def run_scheduler():
         time.sleep(60)  # Проверяем каждую минуту
 
 
-async def start_listener_with_scheduler(config, db):
+async def start_listener_with_scheduler(config):
     """Запустить listener с активным scheduler в фоне"""
-    listener = TelegramListener(config, db)
+    listener = TelegramListener(config)  # TelegramListener creates own db
     shutdown_event = asyncio.Event()
     token = register_shutdown_event(shutdown_event)
 
@@ -250,7 +245,6 @@ def main():
     logger.info("=" * 80)
     logger.info("🚀 MARKETPLACE NEWS BOT")
     logger.info("=" * 80)
-    db = Database(config.db_path, **config.database_settings())
 
     try:
         if mode == "listener":
@@ -269,14 +263,14 @@ def main():
 
             # Настраиваем расписание
             schedule_processor(config)
-            schedule_status_reporter(config, db)
+            schedule_status_reporter(config)  # StatusReporter creates own db
 
             # Запускаем scheduler в отдельном потоке
             scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
             scheduler_thread.start()
 
             # Запускаем listener (блокирующая операция)
-            asyncio.run(start_listener_with_scheduler(config, db))
+            asyncio.run(start_listener_with_scheduler(config))  # TelegramListener creates own db
 
     except KeyboardInterrupt:
         logger.info("Получен сигнал прерывания")
@@ -285,7 +279,7 @@ def main():
         logger.error(f"Критическая ошибка: {e}", exc_info=True)
         sys.exit(1)
     finally:
-        db.close()
+        # Each component closes its own db
         logger.info("Бот остановлен")
 
 

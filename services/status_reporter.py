@@ -4,6 +4,7 @@ from telethon import TelegramClient
 
 from database.db import Database
 from utils.logger import setup_logger
+from utils.telegram_helpers import safe_connect
 from utils.timezone import get_timezone, now_in_timezone
 
 logger = setup_logger(__name__)
@@ -80,17 +81,16 @@ class StatusReporter:
                 await client.start(bot_token=bot_token)
                 logger.debug("StatusReporter использует Bot API (избегает конфликтов сессий)")
             else:
-                # Fallback: используем User API с отдельной сессией
-                # ВНИМАНИЕ: может конфликтовать с listener если он активен!
+                # Fallback: используем User API с основной сессией
+                # Используем ту же сессию что и listener для избежания конфликтов
                 logger.warning(
-                    "⚠️ StatusReporter использует User API - может конфликтовать с listener! "
-                    "Рекомендуется задать status.bot_token в config.yaml"
+                    "⚠️ StatusReporter использует User API - рекомендуется задать status.bot_token в config.yaml"
                 )
-                status_session = self.config.get("telegram.session_name") + "_status"
+                session_name = self.config.get("telegram.session_name")
                 client = TelegramClient(
-                    status_session, self.config.telegram_api_id, self.config.telegram_api_hash
+                    session_name, self.config.telegram_api_id, self.config.telegram_api_hash
                 )
-                await client.start(phone=self.config.telegram_phone)
+                await safe_connect(client, session_name)
 
             # Отправляем сообщение
             await client.send_message(self.status_chat, message)
@@ -120,6 +120,14 @@ class StatusReporter:
             "✅ Бот работает нормально"
         )
         return message
+
+    def __del__(self):
+        """Cleanup on garbage collection"""
+        if self._owns_db:
+            try:
+                self.db.close()
+            except Exception:
+                pass  # Suppress errors during cleanup
 
 
 async def run_status_reporter(config, db=None):

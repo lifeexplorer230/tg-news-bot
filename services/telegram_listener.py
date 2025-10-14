@@ -11,6 +11,7 @@ from telethon.tl.types import Channel
 from database.db import Database
 from utils.config import Config
 from utils.logger import setup_logger
+from utils.telegram_helpers import safe_connect
 from utils.timezone import now_utc
 
 logger = setup_logger(__name__)
@@ -19,16 +20,15 @@ logger = setup_logger(__name__)
 class TelegramListener:
     """Слушатель Telegram каналов"""
 
-    def __init__(self, config: Config, db: Database):
+    def __init__(self, config: Config):
         """
         Инициализация слушателя
 
         Args:
             config: Конфигурация
-            db: База данных
         """
         self.config = config
-        self.db = db
+        self.db = Database(config.db_path, **config.database_settings())
         whitelist = config.get("listener.channel_whitelist", [])
         blacklist = config.get("listener.channel_blacklist", [])
 
@@ -88,7 +88,8 @@ class TelegramListener:
         logger.info("Запуск Telegram слушателя...")
 
         # Подключаемся
-        await self.client.start(phone=self.config.telegram_phone)
+        session_name = self.config.get("telegram.session_name")
+        await safe_connect(self.client, session_name)
         logger.info("Подключение к Telegram установлено")
 
         # Загружаем каналы из подписок

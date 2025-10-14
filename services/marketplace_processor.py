@@ -915,3 +915,10 @@ class MarketplaceProcessor:
         finally:
             await client.disconnect()
             self.db.close()
+
+    def __del__(self):
+        """Cleanup on garbage collection"""
+        try:
+            self.db.close()
+        except Exception:
+            pass  # Suppress errors during cleanup
