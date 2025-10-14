@@ -35,8 +35,8 @@ class StatusReporter:
     async def send_status(self):
         """Отправить статус в группу"""
         try:
-            # Получаем статистику за сегодня
-            stats = self.db.get_today_stats()
+            # Получаем статистику за сегодня (в нужной timezone)
+            stats = self.db.get_today_stats(timezone_name=self.timezone_name)
 
             # Формируем сообщение
             now = now_in_timezone(self.timezone)

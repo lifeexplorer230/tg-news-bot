@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from utils.logger import setup_logger
-from utils.timezone import now_msk
+from utils.timezone import get_timezone, now_in_timezone, now_msk, to_utc
 
 logger = setup_logger(__name__)
 
@@ -470,17 +470,50 @@ class Database:
 
         return stats
 
-    def get_today_stats(self) -> dict:
-        """Получить статистику за сегодня"""
+    def get_today_stats(self, timezone_name: str | None = None) -> dict:
+        """
+        Получить статистику за сегодня
+
+        Args:
+            timezone_name: Имя timezone (например, 'Europe/Moscow').
+                          Если None, используется UTC.
+
+        Returns:
+            dict со статистикой
+        """
         cursor = self.conn.cursor()
         stats = {}
+
+        # Определяем границы "сегодня" в нужной timezone
+        if timezone_name:
+            tz = get_timezone(timezone_name)
+            now = now_in_timezone(tz)
+            # Начало дня в локальной timezone
+            start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            # Конец дня в локальной timezone
+            end_of_day = start_of_day + timedelta(days=1)
+            # Конвертируем в UTC для запросов к БД
+            start_utc = to_utc(start_of_day)
+            end_utc = to_utc(end_of_day)
+        else:
+            # Fallback: используем UTC
+            from datetime import UTC
+
+            now_utc = datetime.now(UTC)
+            start_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_utc = start_utc + timedelta(days=1)
+
+        # Форматируем для SQL (SQLite хранит timestamps как строки или числа)
+        start_str = start_utc.strftime("%Y-%m-%d %H:%M:%S")
+        end_str = end_utc.strftime("%Y-%m-%d %H:%M:%S")
 
         # Сообщения, собранные сегодня
         cursor.execute(
             """
             SELECT COUNT(*) FROM raw_messages
-            WHERE date(date) = date('now')
-        """
+            WHERE date >= ? AND date < ?
+        """,
+            (start_str, end_str),
         )
         stats["messages_today"] = cursor.fetchone()[0]
 
@@ -488,8 +521,9 @@ class Database:
         cursor.execute(
             """
             SELECT COUNT(*) FROM raw_messages
-            WHERE date(created_at) = date('now') AND processed = 1
-        """
+            WHERE created_at >= ? AND created_at < ? AND processed = 1
+        """,
+            (start_str, end_str),
         )
         stats["processed_today"] = cursor.fetchone()[0]
 
@@ -506,8 +540,9 @@ class Database:
         cursor.execute(
             """
             SELECT COUNT(*) FROM published
-            WHERE date(published_at) = date('now')
-        """
+            WHERE published_at >= ? AND published_at < ?
+        """,
+            (start_str, end_str),
         )
         stats["published_today"] = cursor.fetchone()[0]
 
