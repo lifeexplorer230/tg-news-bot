@@ -670,6 +670,7 @@
 | 2025-10-15 02:00 | Sprint 2 | CR-H4 | ✅ | Валидация конфигурации (Pydantic) завершена (4 коммита): Part 1 models/config_schemas.py (431 lines), Part 2-3 интеграция в utils/config.py + env validation (66 lines), Part 4 tests/test_config_validation.py (298 lines, 11 tests). Дружелюбные ❌ error messages. Итого 85/85 tests, 90% coverage |
 | 2025-10-14 21:45 | Sprint 3 | CR-H2 | ✅ | Timezone-aware система: database/db.py get_today_stats() с timezone_name параметром (53 lines), tests/test_timezone.py (233 lines, 6 tests). Границы дня в локальной TZ, конвертация в UTC. 91/91 tests, coverage database/db.py 90.61% (было 40%) |
 | 2025-10-14 22:30 | Sprint 3 | CR-H3 | ✅ | DI layer (Dependency Injection): 2 коммита (Part 1 ServiceContainer + Part 2 main.py integration). core/container.py (118 lines), tests/test_container.py (181 lines, 9 tests), main.py refactored для get_container().config, test_listener_manual.py исправлен (3 теста). 103/103 tests, coverage 90.61% |
+| 2025-10-14 23:00 | Sprint 3 | CR-H5 | ✅ | Config cleanup: удалены 6 групп неиспользуемых параметров (reconnect_timeout, save_batch_size, include_keywords, moderation.exclude_keywords, features.*, alerts.*). Добавлены inline комментарии ко всем секциям base.yaml. Config singleton через CR-H3. Diff: 45 ins, 86 del (-41 lines). 103/103 tests, 90.61% coverage |
 | | | | | |
 
 **Спринты стабилизации (Code Review):**
@@ -694,8 +695,8 @@
 | Дата | Задача | Статус | Комментарий |
 |------|--------|--------|-------------|
 | 2025-10-14 | CR-H2 | ✅ | Timezone-aware система: get_today_stats() с timezone_name, 6 tests границ суток, coverage 90.61% |
-| - | CR-H3 | ⏳ | Хрупкость точки входа / DI layer - не начато |
-| - | CR-H5 | ⏳ | Config cleanup - не начато |
+| 2025-10-14 | CR-H3 | ✅ | DI layer (ServiceContainer): 2 коммита, 9 tests container + 3 tests listener_manual, 103/103 tests passing |
+| 2025-10-14 | CR-H5 | ✅ | Config cleanup: удалены 6 групп неиспользуемых параметров, inline комментарии, 103/103 tests, -41 lines |
 | - | CR-C4 | ⏳ | Реальная модерация Telegram - не начато |
 | - | CR-OPT | ⏳ | Оптимизации и чистка - не начато |
 
@@ -706,8 +707,8 @@
 ## 📌 Текущее состояние
 
 - **Версия:** 1.7.0-dev
-- **Последний коммит:** CR-H2 (timezone-aware stats, 91/91 tests, database coverage 90.61%)
-- **Текущий этап:** Спринт 3 - В РАБОТЕ 🟡 (1/5 completed, 20%)
+- **Последний коммит:** ed46bbb (CR-H5 completed, 103/103 tests, database coverage 90.61%)
+- **Текущий этап:** Спринт 3 - В РАБОТЕ 🟡 (3/5 completed, 60%)
 - **Следующая цель:** Спринт 3 - CR-H3 (DI layer) или CR-C4 (Модерация)
 - **Блокеры:** Нет
 
