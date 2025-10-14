@@ -352,6 +352,7 @@ class MarketplaceProcessor:
     ) -> bool:
         """
         Проверить дубликат inline без обращения к БД (оптимизация CR-H1)
+        Оптимизировано (CR-C5): используем batch_cosine_similarity для векторизации
 
         Args:
             embedding: Embedding для проверки
@@ -369,17 +370,23 @@ class MarketplaceProcessor:
             logger.warning("Получен embedding с нулевой нормой при проверке дубликатов")
             return False
 
-        for post_id, published_embedding in published_embeddings:
-            published_norm = np.linalg.norm(published_embedding)
-            if published_norm == 0:
-                continue
+        # CR-C5: Векторизованная проверка similarity для всех embeddings сразу
+        # Извлекаем только embeddings (без post_id) и формируем матрицу
+        embeddings_matrix = np.array([emb for _, emb in published_embeddings])
 
-            similarity = np.dot(embedding, published_embedding) / (
-                embedding_norm * published_norm
-            )
+        # Вычисляем все similarity scores за один раз
+        similarities = self.embeddings.batch_cosine_similarity(embedding, embeddings_matrix)
 
-            if similarity >= threshold:
-                logger.debug(f"Найден дубликат: post_id={post_id}, similarity={similarity:.3f}")
+        # Находим максимальную схожесть
+        if len(similarities) > 0:
+            max_similarity = np.max(similarities)
+            if max_similarity >= threshold:
+                # Находим post_id с максимальной схожестью для логирования
+                max_idx = np.argmax(similarities)
+                post_id = published_embeddings[max_idx][0]
+                logger.debug(
+                    f"Найден дубликат: post_id={post_id}, similarity={max_similarity:.3f}"
+                )
                 return True
 
         return False
