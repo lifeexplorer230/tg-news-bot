@@ -180,6 +180,43 @@ class EmbeddingService:
         norm2 = np.linalg.norm(embedding2)
         return dot_product / (norm1 * norm2)
 
+    @staticmethod
+    def batch_cosine_similarity(
+        embedding: np.ndarray, embeddings_matrix: np.ndarray
+    ) -> np.ndarray:
+        """
+        Вычислить косинусное сходство между одним embedding и массивом embeddings (CR-C5)
+
+        Использует numpy векторизацию для ускорения вычислений O(1) вместо O(N).
+
+        Args:
+            embedding: Embedding для сравнения (1D array, shape: [embedding_dim])
+            embeddings_matrix: Матрица embeddings (2D array, shape: [n_embeddings, embedding_dim])
+
+        Returns:
+            Array со значениями similarity (shape: [n_embeddings])
+        """
+        if embeddings_matrix.shape[0] == 0:
+            return np.array([])
+
+        # Нормализуем query embedding
+        embedding_norm = np.linalg.norm(embedding)
+        if embedding_norm == 0:
+            return np.zeros(embeddings_matrix.shape[0])
+
+        # Нормализуем все embeddings в матрице
+        norms = np.linalg.norm(embeddings_matrix, axis=1)
+        # Избегаем деления на ноль
+        norms = np.where(norms == 0, 1, norms)
+
+        # Векторизованное вычисление dot products
+        dot_products = np.dot(embeddings_matrix, embedding)
+
+        # Косинусное сходство = dot_product / (norm1 * norm2)
+        similarities = dot_products / (norms * embedding_norm)
+
+        return similarities
+
     def find_duplicates(
         self, text: str, existing_embeddings: list[tuple[int, np.ndarray]], threshold: float = 0.85
     ) -> list[tuple[int, float]]:
