@@ -53,33 +53,33 @@ class NewsProcessor:
                 for name in raw_marketplaces
             ]
 
-        self.marketplaces: dict[str, Category] = {}
+        self.categories: dict[str, Category] = {}
         for mp_cfg in raw_marketplaces:
             if not isinstance(mp_cfg, dict):
                 continue
             data = dict(mp_cfg)
             data.setdefault("enabled", True)
             try:
-                marketplace = Category(**data)
+                category = Category(**data)
             except TypeError as exc:
                 logger.error(f"Некорректная конфигурация маркетплейса {mp_cfg}: {exc}")
                 continue
-            marketplace.combined_exclude_keywords_lower = list(
-                dict.fromkeys(marketplace.exclude_keywords_lower + self.global_exclude_keywords)
+            category.combined_exclude_keywords_lower = list(
+                dict.fromkeys(category.exclude_keywords_lower + self.global_exclude_keywords)
             )
-            self.marketplaces[marketplace.name] = marketplace
+            self.categories[category.name] = category
 
-        if not self.marketplaces:
+        if not self.categories:
             logger.warning("В конфигурации не найдено ни одного маркетплейса")
 
         self.all_exclude_keywords_lower = set(self.global_exclude_keywords)
-        for marketplace in self.marketplaces.values():
-            self.all_exclude_keywords_lower.update(marketplace.combined_exclude_keywords_lower)
+        for category in self.categories.values():
+            self.all_exclude_keywords_lower.update(category.combined_exclude_keywords_lower)
 
-        self.marketplace_names = list(self.marketplaces.keys())
+        self.category_names = list(self.categories.keys())
 
         default_channel = next(
-            (mp.target_channel for mp in self.marketplaces.values() if mp.target_channel),
+            (mp.target_channel for mp in self.categories.values() if mp.target_channel),
             None,
         )
 
@@ -140,7 +140,7 @@ class NewsProcessor:
             )
         return self._gemini_client
 
-    async def process_marketplace(
+    async def process_category(
         self, marketplace: str, client: TelegramClient, base_messages: list[dict] | None = None
     ):
         """
@@ -152,11 +152,11 @@ class NewsProcessor:
             base_messages: Кэшированные сообщения (оптимизация CR-H1). Если None - загружаются из БД
         """
 
-        if marketplace not in self.marketplaces:
+        if marketplace not in self.categories:
             logger.error(f"Неизвестный маркетплейс: {marketplace}")
             return
 
-        mp_config = self.marketplaces.get(marketplace)
+        mp_config = self.categories.get(marketplace)
         if mp_config is None:
             logger.error(f"Маркетплейс {marketplace} отсутствует в конфигурации")
             return
@@ -535,7 +535,7 @@ class NewsProcessor:
             self.all_digest_channel
             if self.all_digest_enabled and self.all_digest_channel
             else next(
-                (mp.target_channel for mp in self.marketplaces.values() if mp.target_channel),
+                (mp.target_channel for mp in self.categories.values() if mp.target_channel),
                 None,
             )
         )
@@ -991,15 +991,15 @@ class NewsProcessor:
                 # CR-H1: Загружаем сообщения ОДИН раз для всех маркетплейсов
                 base_messages = self.db.get_unprocessed_messages(hours=24)
                 logger.info(
-                    f"📦 CR-H1: Загружено {len(base_messages)} сообщений (будут переиспользованы для {len(self.marketplace_names)} маркетплейсов)"
+                    f"📦 CR-H1: Загружено {len(base_messages)} сообщений (будут переиспользованы для {len(self.category_names)} маркетплейсов)"
                 )
 
-                for marketplace in self.marketplace_names:
+                for category_name in self.category_names:
                     try:
                         # Передаем кэшированные base_messages вместо повторного чтения из БД
-                        await self.process_marketplace(marketplace, client, base_messages=base_messages)
+                        await self.process_category(category_name, client, base_messages=base_messages)
                     except Exception as e:
-                        logger.error(f"Ошибка обработки {marketplace}: {e}", exc_info=True)
+                        logger.error(f"Ошибка обработки {category_name}: {e}", exc_info=True)
         finally:
             await client.disconnect()
             self.db.close()
