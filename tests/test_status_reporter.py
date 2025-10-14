@@ -8,6 +8,10 @@ class DummyClient:
     def __init__(self):
         self.messages = []
 
+    async def connect(self):
+        """Mock connect method for safe_connect compatibility"""
+        return None
+
     async def start(self, **kwargs):
         return None
 
@@ -69,7 +73,7 @@ def test_status_reporter_uses_template(monkeypatch):
                 "bot_name": "Test Bot",
                 "timezone": "Europe/Moscow",
                 "message_template": "STATUS {bot_name} {date} {messages_today}",
-                "bot_token": "",
+                "bot_token": "test_bot_token",  # Use Bot API to avoid safe_connect issues
             }
         }
     )
@@ -95,7 +99,7 @@ def test_status_reporter_fallback_on_template_error(monkeypatch):
                 "bot_name": "Test Bot",
                 "timezone": "Europe/Moscow",
                 "message_template": "Broken {unknown}",
-                "bot_token": "",
+                "bot_token": "test_bot_token",  # Use Bot API to avoid safe_connect issues
             }
         }
     )
