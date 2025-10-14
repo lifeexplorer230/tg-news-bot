@@ -1,8 +1,8 @@
 import asyncio
 from types import SimpleNamespace
 
-from models.marketplace import Marketplace
-from services.marketplace_processor import MarketplaceProcessor
+from models.category import Category
+from services.news_processor import NewsProcessor
 
 
 class FakeDB:
@@ -49,19 +49,19 @@ class FakeClient:
 
 
 def make_processor(messages, moderation_enabled=False):
-    processor = MarketplaceProcessor.__new__(MarketplaceProcessor)
+    processor = NewsProcessor.__new__(NewsProcessor)
     processor.config = SimpleNamespace(my_personal_account="tester")
     processor.db = FakeDB(messages)
     processor.global_exclude_keywords = ["spam"]
     processor.marketplaces = {
-        "ozon": Marketplace(
+        "ozon": Category(
             name="ozon",
             target_channel="@ozon",
             keywords=[],
             exclude_keywords=["spam"],
             top_n=5,
         ),
-        "wildberries": Marketplace(
+        "wildberries": Category(
             name="wildberries",
             target_channel="@wb",
             keywords=[],

@@ -1,4 +1,4 @@
-"""Обработчик новостей маркетплейсов с поддержкой Ozon и Wildberries"""
+"""Универсальный процессор новостей с поддержкой категорий"""
 
 import asyncio
 from datetime import timedelta
@@ -7,7 +7,7 @@ import numpy as np
 from telethon import TelegramClient
 
 from database.db import Database
-from models.marketplace import Marketplace
+from models.category import Category
 from services.embeddings import EmbeddingService
 from services.gemini_client import GeminiClient
 from utils.config import Config
@@ -18,8 +18,8 @@ from utils.timezone import now_msk
 logger = get_logger(__name__)
 
 
-class MarketplaceProcessor:
-    """Процессор новостей для маркетплейсов (Ozon и Wildberries)"""
+class NewsProcessor:
+    """Универсальный процессор новостей с поддержкой категорий"""
 
     def __init__(self, config: Config):
         self.config = config
@@ -53,14 +53,14 @@ class MarketplaceProcessor:
                 for name in raw_marketplaces
             ]
 
-        self.marketplaces: dict[str, Marketplace] = {}
+        self.marketplaces: dict[str, Category] = {}
         for mp_cfg in raw_marketplaces:
             if not isinstance(mp_cfg, dict):
                 continue
             data = dict(mp_cfg)
             data.setdefault("enabled", True)
             try:
-                marketplace = Marketplace(**data)
+                marketplace = Category(**data)
             except TypeError as exc:
                 logger.error(f"Некорректная конфигурация маркетплейса {mp_cfg}: {exc}")
                 continue
