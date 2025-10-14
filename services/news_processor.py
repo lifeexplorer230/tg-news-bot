@@ -43,7 +43,8 @@ class NewsProcessor:
             keyword.lower() for keyword in config.get("filters.exclude_keywords", []) if keyword
         ]
 
-        raw_marketplaces = config.get("marketplaces", [])
+        # U4: Backwards compatibility - поддержка обоих ключей (categories и marketplaces)
+        raw_marketplaces = config.get("categories") or config.get("marketplaces", [])
         if isinstance(raw_marketplaces, dict):
             raw_marketplaces = [
                 {
