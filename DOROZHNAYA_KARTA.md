@@ -663,6 +663,7 @@
 | 2025-10-14 20:15 | Sprint 1 | CR-C1 | ✅ | StatusReporter DI уже исправлен, обновлены тесты (2/2 passing) |
 | 2025-10-14 21:00 | Sprint 1 | CR-C2 | ✅ | Отложенная пометка processed в process_marketplace и process_all_categories (54/54 tests, 92.78% coverage) |
 | 2025-10-14 22:30 | Sprint 1 | CR-C3 | ✅ | SQLite lifecycle и concurrency (2 коммита: Part 1 context manager + Part 2 per-component db, 51/51 tests, 90% coverage) |
+| 2025-10-14 23:00 | Sprint 1 | CR-C7 | ✅ | Adaptive scheduler с schedule.idle_seconds() и safety sleep (6/6 tests, 57/57 total, 90% coverage) |
 | | | | | |
 
 **Спринты стабилизации (Code Review):**
@@ -673,7 +674,7 @@
 | 2025-10-14 | CR-C1 | ✅ | StatusReporter DI уже исправлен, тесты обновлены (connect() + bot_token) |
 | 2025-10-14 | CR-C2 | ✅ | Отложенная пометка processed в process_marketplace и process_all_categories (2 коммита: Part 1 + Part 2) |
 | 2025-10-14 | CR-C3 | ✅ | SQLite lifecycle и concurrency (Part 1: context manager + threading, Part 2: per-component db instances) |
-| - | CR-C7 | ⏳ | Adaptive scheduler - не начато |
+| 2025-10-14 | CR-C7 | ✅ | Adaptive scheduler (schedule.idle_seconds() + safety sleep max 5s + edge cases + 6 tests) |
 
 ### Спринт 2: Высокий приоритет
 | Дата | Задача | Статус | Комментарий |
@@ -698,24 +699,25 @@
 
 ## 📌 Текущее состояние
 
-- **Версия:** 1.2.0-dev
-- **Последний коммит:** CR-C3 Part 2 completed (per-component db instances, 51/51 tests, 90% coverage)
-- **Текущий этап:** Спринт 1 - Критические блокеры (3/4 completed)
-- **Следующая цель:** CR-C7 (Adaptive scheduler)
+- **Версия:** 1.3.0-dev
+- **Последний коммит:** CR-C7 completed (adaptive scheduler, 57/57 tests, 90% coverage)
+- **Текущий этап:** Спринт 1 - ЗАВЕРШЕН ✅ (4/4 completed, 100%)
+- **Следующая цель:** Спринт 2 - Высокий приоритет (CR-H1, CR-C5, CR-C6, CR-H4)
 - **Блокеры:** Нет
 
 **Готовность компонентов:**
 - ✅ Listener — базовая функциональность работает, создает свой DB
 - ✅ Processor — базовая функциональность работает, создает свой DB
 - ✅ Database — SQLite с WAL mode + context manager + per-component instances
+- ✅ Scheduler — adaptive idle через schedule.idle_seconds() + safety sleep
 - ✅ FloodWait protection — safe_connect() применен
-- ✅ Тесты — 51/51 passing, 90% coverage
+- ✅ Тесты — 57/57 passing, 90% coverage (6 новых scheduler tests)
 - ⏳ CI/CD — не настроен
 - ⏳ Monitoring — минимальный (healthcheck)
 
 **Новые спринты (Code Review):**
-- 🔴 Спринт 1: 4 критических блокера (CR-C1 ✅, CR-C2 ✅, CR-C3 ✅, CR-C7 ⏳)
-- 🟡 Спринт 2: 4 высокоприоритетных задачи (CR-H1, CR-C5, CR-C6, CR-H4)
+- ✅ Спринт 1: 4 критических блокера ЗАВЕРШЕН (CR-C1 ✅, CR-C2 ✅, CR-C3 ✅, CR-C7 ✅)
+- 🟡 Спринт 2: 4 высокоприоритетных задачи (CR-H1 ⏳, CR-C5 ⏳, CR-C6 ⏳, CR-H4 ⏳)
 - 🟢 Спринт 3: 5 задач качества/масштаба (CR-H2, CR-H3, CR-H5, CR-C4, CR-OPT)
 
 ---
