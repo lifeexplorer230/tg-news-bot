@@ -142,7 +142,19 @@ def test_process_all_categories_marks_all_outcomes():
             "general": [],
         }
 
-    processor._gemini_client = SimpleNamespace(select_three_categories=fake_select_three_categories)
+    def fake_select_by_categories(_messages, category_counts, chunk_size=50):
+        # Wrapper для backwards compatibility с select_three_categories
+        return fake_select_three_categories(
+            _messages,
+            wb_count=category_counts.get("wildberries", 5),
+            ozon_count=category_counts.get("ozon", 5),
+            general_count=category_counts.get("general", 5),
+        )
+
+    processor._gemini_client = SimpleNamespace(
+        select_three_categories=fake_select_three_categories,
+        select_by_categories=fake_select_by_categories,
+    )
 
     asyncio.run(processor.process_all_categories(FakeClient()))
 
@@ -187,7 +199,19 @@ def test_process_all_categories_marks_moderator_rejections():
             "general": [],
         }
 
-    processor._gemini_client = SimpleNamespace(select_three_categories=fake_select_three_categories)
+    def fake_select_by_categories(_messages, category_counts, chunk_size=50):
+        # Wrapper для backwards compatibility с select_three_categories
+        return fake_select_three_categories(
+            _messages,
+            wb_count=category_counts.get("wildberries", 5),
+            ozon_count=category_counts.get("ozon", 5),
+            general_count=category_counts.get("general", 5),
+        )
+
+    processor._gemini_client = SimpleNamespace(
+        select_three_categories=fake_select_three_categories,
+        select_by_categories=fake_select_by_categories,
+    )
 
     async def fake_moderate_categories(client, categories):
         return []

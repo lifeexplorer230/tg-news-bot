@@ -89,11 +89,9 @@ class MarketplaceProcessor:
             default_channel,
         )
         counts_config = config.get("channels.all_digest.category_counts", {})
-        self.all_digest_counts = {
-            "wildberries": counts_config.get("wildberries", 5),
-            "ozon": counts_config.get("ozon", 5),
-            "general": counts_config.get("general", 5),
-        }
+        # Динамически читаем категории из конфига (универсальная система)
+        # Поддерживает любые категории, не только marketplace-специфичные
+        self.all_digest_counts = dict(counts_config) if counts_config else {}
 
         self.publication_header_template = config.get(
             "publication.header_template",
@@ -470,23 +468,20 @@ class MarketplaceProcessor:
             logger.warning("Все сообщения являются дубликатами")
             return
 
-        # ШАГ 4: Отбор по 3 категориям через Gemini (5+5+5=15 новостей)
-        categories = self.gemini.select_three_categories(
+        # ШАГ 4: Отбор по категориям через Gemini (динамическая система)
+        # Поддерживает любые категории из конфига, не только marketplace-специфичные
+        categories = self.gemini.select_by_categories(
             unique_messages,
-            wb_count=self.all_digest_counts["wildberries"],
-            ozon_count=self.all_digest_counts["ozon"],
-            general_count=self.all_digest_counts["general"],
+            category_counts=self.all_digest_counts,
         )
 
-        # Подсчитываем сколько получилось
-        wb_count = len(categories.get("wildberries", []))
-        ozon_count = len(categories.get("ozon", []))
-        general_count = len(categories.get("general", []))
-        total_count = wb_count + ozon_count + general_count
+        # Подсчитываем сколько получилось (динамически для всех категорий)
+        category_stats = {cat: len(posts) for cat, posts in categories.items()}
+        total_count = sum(category_stats.values())
 
-        logger.info(
-            f"Gemini отобрал: WB={wb_count}, Ozon={ozon_count}, Общие={general_count}, Всего={total_count}"
-        )
+        # Формируем красивый лог с категориями
+        stats_str = ", ".join(f"{cat}={count}" for cat, count in category_stats.items())
+        logger.info(f"Gemini отобрал: {stats_str}, Всего={total_count}")
 
         selected_ids = {
             post["source_message_id"]
@@ -511,12 +506,8 @@ class MarketplaceProcessor:
                     self.db.mark_as_processed(msg_id, rejection_reason="rejected_by_moderator")
                 return
         else:
-            # Без модерации - берем все что есть
-            approved_posts = (
-                categories.get("wildberries", [])
-                + categories.get("ozon", [])
-                + categories.get("general", [])
-            )
+            # Без модерации - берем все что есть (динамически для всех категорий)
+            approved_posts = [post for posts in categories.values() for post in posts]
 
         approved_ids = {
             post.get("source_message_id")
@@ -799,30 +790,16 @@ class MarketplaceProcessor:
 
         idx = 1
 
-        # Категория Wildberries
-        if categories.get("wildberries"):
-            lines.append("📦 **WILDBERRIES**\n")
-            for post in categories["wildberries"]:
-                emoji = number_emojis.get(idx, f"{idx}.")
-                lines.append(f"{emoji} **{post['title']}**")
-                lines.append(f"_{post['description'][:100]}..._")
-                lines.append(f"⭐ {post.get('score', 0)}/10\n")
-                idx += 1
+        # Динамически форматируем все категории (универсальная система)
+        for category_name, posts in categories.items():
+            if not posts:
+                continue
 
-        # Категория Ozon
-        if categories.get("ozon"):
-            lines.append("📦 **OZON**\n")
-            for post in categories["ozon"]:
-                emoji = number_emojis.get(idx, f"{idx}.")
-                lines.append(f"{emoji} **{post['title']}**")
-                lines.append(f"_{post['description'][:100]}..._")
-                lines.append(f"⭐ {post.get('score', 0)}/10\n")
-                idx += 1
+            # Форматируем имя категории красиво
+            display_name = category_name.upper().replace("_", " ")
+            lines.append(f"📦 **{display_name}**\n")
 
-        # Категория Общие
-        if categories.get("general"):
-            lines.append("📦 **ОБЩИЕ**\n")
-            for post in categories["general"]:
+            for post in posts:
                 emoji = number_emojis.get(idx, f"{idx}.")
                 lines.append(f"{emoji} **{post['title']}**")
                 lines.append(f"_{post['description'][:100]}..._")
