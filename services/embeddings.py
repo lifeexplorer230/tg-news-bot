@@ -1,5 +1,7 @@
 """Работа с embeddings для проверки дубликатов"""
 
+import asyncio
+import functools
 import threading
 from collections.abc import Iterable
 from pathlib import Path
@@ -118,6 +120,48 @@ class EmbeddingService:
             show_progress_bar=show_progress_bar,
             batch_size=batch_size,
         )
+
+    async def encode_async(self, text: str) -> np.ndarray:
+        """
+        Async wrapper для encode (CR-C5)
+
+        Запускает блокирующий encode в thread pool executor чтобы не блокировать async event loop.
+
+        Args:
+            text: Текст для кодирования
+
+        Returns:
+            Numpy array с embedding
+        """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.encode, text)
+
+    async def encode_batch_async(
+        self,
+        texts: list[str] | Iterable[str],
+        *,
+        batch_size: int | None = None,
+        show_progress_bar: bool = False,
+    ) -> np.ndarray:
+        """
+        Async wrapper для encode_batch (CR-C5)
+
+        Запускает блокирующий encode_batch в thread pool executor чтобы не блокировать async event loop.
+
+        Args:
+            texts: Список текстов
+            batch_size: Размер батча для модели (опционально)
+            show_progress_bar: Показывать прогресс при батчевом кодировании
+
+        Returns:
+            Numpy array с embeddings (shape: [len(texts), embedding_dim])
+        """
+        loop = asyncio.get_running_loop()
+        # Используем partial для передачи именованных аргументов
+        func = functools.partial(
+            self.encode_batch, batch_size=batch_size, show_progress_bar=show_progress_bar
+        )
+        return await loop.run_in_executor(None, func, texts)
 
     @staticmethod
     def cosine_similarity(embedding1: np.ndarray, embedding2: np.ndarray) -> float:
