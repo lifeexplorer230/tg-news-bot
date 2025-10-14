@@ -2,6 +2,7 @@
 
 from datetime import timedelta
 
+import numpy as np
 from telethon import TelegramClient
 
 from database.db import Database
@@ -24,6 +25,11 @@ class MarketplaceProcessor:
         self.db = Database(config.db_path, **config.database_settings())
         self._embedding_service: EmbeddingService | None = None
         self._gemini_client: GeminiClient | None = None
+
+        # Кэш для оптимизации (CR-H1)
+        self._cached_published_embeddings: list[tuple[int, any]] | None = None
+        self._cached_base_messages: list[dict] | None = None
+
         self._embedding_model_name = config.get(
             "embeddings.model", "paraphrase-multilingual-MiniLM-L12-v2"
         )
@@ -134,8 +140,17 @@ class MarketplaceProcessor:
             )
         return self._gemini_client
 
-    async def process_marketplace(self, marketplace: str, client: TelegramClient):
-        """Обработка новостей для конкретного маркетплейса"""
+    async def process_marketplace(
+        self, marketplace: str, client: TelegramClient, base_messages: list[dict] | None = None
+    ):
+        """
+        Обработка новостей для конкретного маркетплейса
+
+        Args:
+            marketplace: Название маркетплейса
+            client: Telegram client
+            base_messages: Кэшированные сообщения (оптимизация CR-H1). Если None - загружаются из БД
+        """
 
         if marketplace not in self.marketplaces:
             logger.error(f"Неизвестный маркетплейс: {marketplace}")
@@ -154,9 +169,12 @@ class MarketplaceProcessor:
         logger.info(f"🛒 ОБРАБОТКА НОВОСТЕЙ: {marketplace.upper()}")
         logger.info("=" * 80)
 
-        # ШАГ 1: Загружаем сообщения за последние 24 часа
-        base_messages = self.db.get_unprocessed_messages(hours=24)
-        logger.info(f"Загружено {len(base_messages)} необработанных сообщений")
+        # ШАГ 1: Загружаем сообщения (из кэша или БД)
+        if base_messages is None:
+            base_messages = self.db.get_unprocessed_messages(hours=24)
+            logger.info(f"Загружено {len(base_messages)} необработанных сообщений из БД")
+        else:
+            logger.info(f"Используем {len(base_messages)} кэшированных сообщений (CR-H1)")
 
         if not base_messages:
             logger.info(f"Нет новых сообщений для {marketplace}")
@@ -289,6 +307,8 @@ class MarketplaceProcessor:
         """
         Фильтрация дубликатов через embeddings
 
+        Оптимизировано (CR-H1): загружаем published_embeddings один раз и кэшируем
+
         Returns:
             Tuple of (unique_messages, rejected_reasons)
             where rejected_reasons maps message_id -> rejection_reason
@@ -296,12 +316,21 @@ class MarketplaceProcessor:
         unique = []
         rejected = {}
 
+        # CR-H1: Загружаем published embeddings один раз и кэшируем
+        if self._cached_published_embeddings is None:
+            self._cached_published_embeddings = self.db.get_published_embeddings(days=60)
+            logger.debug(f"Загружено {len(self._cached_published_embeddings)} published embeddings в кэш")
+
+        published_embeddings = self._cached_published_embeddings
+
         for msg in messages:
             # Генерируем embedding
             embedding = self.embeddings.encode(msg["text"])
 
-            # Проверяем на дубликаты
-            is_duplicate = self.db.check_duplicate(embedding, self.duplicate_threshold)
+            # Проверяем на дубликаты (inline вместо db.check_duplicate)
+            is_duplicate = self._check_duplicate_inline(
+                embedding, published_embeddings, self.duplicate_threshold
+            )
 
             if is_duplicate:
                 rejected[msg["id"]] = "is_duplicate"
@@ -310,6 +339,43 @@ class MarketplaceProcessor:
             unique.append(msg)
 
         return unique, rejected
+
+    def _check_duplicate_inline(
+        self, embedding: np.ndarray, published_embeddings: list, threshold: float = 0.85
+    ) -> bool:
+        """
+        Проверить дубликат inline без обращения к БД (оптимизация CR-H1)
+
+        Args:
+            embedding: Embedding для проверки
+            published_embeddings: Список (post_id, published_embedding)
+            threshold: Порог схожести
+
+        Returns:
+            True если найден дубликат
+        """
+        if not published_embeddings:
+            return False
+
+        embedding_norm = np.linalg.norm(embedding)
+        if embedding_norm == 0:
+            logger.warning("Получен embedding с нулевой нормой при проверке дубликатов")
+            return False
+
+        for post_id, published_embedding in published_embeddings:
+            published_norm = np.linalg.norm(published_embedding)
+            if published_norm == 0:
+                continue
+
+            similarity = np.dot(embedding, published_embedding) / (
+                embedding_norm * published_norm
+            )
+
+            if similarity >= threshold:
+                logger.debug(f"Найден дубликат: post_id={post_id}, similarity={similarity:.3f}")
+                return True
+
+        return False
 
     async def moderate_posts(
         self, client: TelegramClient, posts: list[dict], marketplace: str
@@ -907,9 +973,17 @@ class MarketplaceProcessor:
                 await self.process_all_categories(client)
             else:
                 # СТАРАЯ СИСТЕМА: Обрабатываем каждый маркетплейс отдельно
+
+                # CR-H1: Загружаем сообщения ОДИН раз для всех маркетплейсов
+                base_messages = self.db.get_unprocessed_messages(hours=24)
+                logger.info(
+                    f"📦 CR-H1: Загружено {len(base_messages)} сообщений (будут переиспользованы для {len(self.marketplace_names)} маркетплейсов)"
+                )
+
                 for marketplace in self.marketplace_names:
                     try:
-                        await self.process_marketplace(marketplace, client)
+                        # Передаем кэшированные base_messages вместо повторного чтения из БД
+                        await self.process_marketplace(marketplace, client, base_messages=base_messages)
                     except Exception as e:
                         logger.error(f"Ошибка обработки {marketplace}: {e}", exc_info=True)
         finally:
