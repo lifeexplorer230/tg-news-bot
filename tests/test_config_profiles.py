@@ -59,12 +59,13 @@ def base_profile_config(tmp_path):
 
 
 def _set_env(monkeypatch):
+    # CR-H4: Используем валидные значения для Pydantic валидации
     monkeypatch.setenv("TELEGRAM_API_ID", "12345")
-    monkeypatch.setenv("TELEGRAM_API_HASH", "hash")
-    monkeypatch.setenv("TELEGRAM_PHONE", "+100000000")
+    monkeypatch.setenv("TELEGRAM_API_HASH", "a" * 32)  # 32 символа
+    monkeypatch.setenv("TELEGRAM_PHONE", "+12345678901")  # 11 цифр
     monkeypatch.setenv("MY_CHANNEL", "@demo")
     monkeypatch.setenv("MY_PERSONAL_ACCOUNT", "@owner")
-    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test_" + "a" * 16)  # 21 символ
 
 
 def test_load_config_with_explicit_profile(tmp_path, monkeypatch, base_profile_config):

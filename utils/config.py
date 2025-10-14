@@ -9,6 +9,9 @@ from typing import Any, Dict
 
 import yaml
 from dotenv import load_dotenv
+from pydantic import ValidationError
+
+from models.config_schemas import AppConfig, EnvConfig
 
 DEFAULT_BASE_PATH = Path("config/base.yaml")
 DEFAULT_PROFILES_DIR = Path("config/profiles")
@@ -83,12 +86,64 @@ class Config:
         ).resolve()
         self._prompt_cache: dict[str, str] = {}
 
+        # CR-H4: Валидация конфига с Pydantic перед использованием
+        self._validate_config()
+
         self._apply_paths()
         self._load_env_keys()
 
     # ------------------------------------------------------------------
     # Внутренние методы
     # ------------------------------------------------------------------
+
+    def _validate_config(self) -> None:
+        """
+        Валидация конфига с Pydantic (CR-H4)
+
+        Raises:
+            ValueError: Если конфиг невалиден с понятным сообщением об ошибке
+        """
+        try:
+            # Валидируем конфиг через Pydantic
+            AppConfig(**self.config)
+        except ValidationError as e:
+            # Формируем дружелюбное сообщение об ошибке
+            error_lines = ["\n❌ Ошибка валидации конфигурации:"]
+            for error in e.errors():
+                loc_path = " -> ".join(str(x) for x in error["loc"])
+                msg = error["msg"]
+                error_lines.append(f"  • {loc_path}: {msg}")
+            error_lines.append("\nПроверьте config/base.yaml и профильный конфиг.")
+            raise ValueError("\n".join(error_lines)) from e
+
+    def _validate_env(self) -> None:
+        """
+        Валидация env переменных с Pydantic (CR-H4)
+
+        Raises:
+            ValueError: Если env переменные невалидны с понятным сообщением
+        """
+        try:
+            # Собираем все env переменные
+            env_vars = {
+                "TELEGRAM_API_ID": os.getenv("TELEGRAM_API_ID", "0"),
+                "TELEGRAM_API_HASH": os.getenv("TELEGRAM_API_HASH", ""),
+                "TELEGRAM_PHONE": os.getenv("TELEGRAM_PHONE", ""),
+                "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY", ""),
+                "MY_CHANNEL": os.getenv("MY_CHANNEL", ""),
+                "MY_PERSONAL_ACCOUNT": os.getenv("MY_PERSONAL_ACCOUNT", ""),
+            }
+            # Валидируем через Pydantic
+            EnvConfig(**env_vars)
+        except ValidationError as e:
+            # Формируем дружелюбное сообщение об ошибке
+            error_lines = ["\n❌ Ошибка валидации env переменных (.env файл):"]
+            for error in e.errors():
+                field_name = error["loc"][0] if error["loc"] else "unknown"
+                msg = error["msg"]
+                error_lines.append(f"  • {field_name}: {msg}")
+            error_lines.append("\nПроверьте файл .env и убедитесь что все переменные заполнены корректно.")
+            raise ValueError("\n".join(error_lines)) from e
 
     def _apply_paths(self) -> None:
         paths = self.config.setdefault("paths", {})
@@ -168,6 +223,10 @@ class Config:
         self.paths = context
 
     def _load_env_keys(self) -> None:
+        # CR-H4: Валидация env переменных перед загрузкой
+        self._validate_env()
+
+        # Загружаем провалидированные значения
         self.telegram_api_id = int(os.getenv("TELEGRAM_API_ID", "0"))
         self.telegram_api_hash = os.getenv("TELEGRAM_API_HASH", "")
         self.telegram_phone = os.getenv("TELEGRAM_PHONE", "")
