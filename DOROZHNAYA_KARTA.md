@@ -666,6 +666,7 @@
 | 2025-10-14 23:00 | Sprint 1 | CR-C7 | ✅ | Adaptive scheduler с schedule.idle_seconds() и safety sleep (6/6 tests, 57/57 total, 90% coverage) |
 | 2025-10-14 23:30 | Sprint 2 | CR-H1 | ✅ | Оптимизация чтения сообщений: кэш published_embeddings + base_messages, inline duplicate check (90 lines, 57/57 tests, 90% coverage, 2x+ ускорение) |
 | 2025-10-15 00:30 | Sprint 2 | CR-C5 | ✅ | Batch embeddings и async дедупликация: 5 коммитов (Part 1-5), async wrappers + batch encoding + batch similarity + tests (63/63 tests, 90% coverage, 5-10x ускорение) |
+| 2025-10-15 01:00 | Sprint 2 | CR-C6 | 🔄 | Robust LLM - Part 1/5 завершено: Pydantic schemas для всех типов ответов (models/llm_schemas.py, 125 lines). Осталось: chunking + валидация + логирование + тесты |
 | | | | | |
 
 **Спринты стабилизации (Code Review):**
@@ -683,7 +684,7 @@
 |------|--------|--------|-------------|
 | 2025-10-14 | CR-H1 | ✅ | Оптимизация чтения сообщений: кэш published_embeddings + base_messages, inline check (90 lines, 2x+ speedup) |
 | 2025-10-15 | CR-C5 | ✅ | Batch embeddings и async дедупликация (5 коммитов: async wrappers, batch in filter_duplicates, batch in publish, batch similarity, tests + pytest-asyncio) |
-| - | CR-C6 | ⏳ | Robust LLM (JSON validation, retry, chunking) - не начато |
+| 2025-10-15 | CR-C6 | 🔄 | Robust LLM - Part 1/5: Pydantic schemas созданы (models/llm_schemas.py). Осталось: chunking промптов, валидация размера, улучшенное логирование, тесты |
 | - | CR-H4 | ⏳ | Валидация конфигурации (Pydantic) - не начато |
 
 ### Спринт 3: Качество и масштабируемость
@@ -702,9 +703,9 @@
 ## 📌 Текущее состояние
 
 - **Версия:** 1.5.0-dev
-- **Последний коммит:** CR-C5 completed (batch embeddings + async, 63/63 tests, 90% coverage)
-- **Текущий этап:** Спринт 2 - В процессе 🟡 (2/4 completed, 50%)
-- **Следующая цель:** CR-C6 (Robust LLM - JSON validation, retry, chunking)
+- **Последний коммит:** CR-C6 Part 1/5 (Pydantic schemas, 63/63 tests, 90% coverage)
+- **Текущий этап:** Спринт 2 - В процессе 🟡 (2/4 completed + CR-C6 1/5, ~55%)
+- **Следующая цель:** CR-C6 Parts 2-5 (chunking промптов, валидация, логирование, тесты)
 - **Блокеры:** Нет
 
 **Готовность компонентов:**
