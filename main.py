@@ -17,6 +17,7 @@ import time
 
 import schedule
 
+from core.container import get_container, set_container, ServiceContainer
 from services.marketplace_processor import MarketplaceProcessor
 from services.status_reporter import run_status_reporter
 from services.telegram_listener import TelegramListener
@@ -72,7 +73,8 @@ def signal_handler(sig, frame):
 async def run_listener_mode(config: Config | None = None):
     """Запуск listener (слушает каналы 24/7)"""
     external_config = config is not None
-    config = config or load_config()
+    # Используем config из container если не передан явно
+    config = config or get_container().config
     if not external_config:
         configure_logging(
             level=config.log_level,
@@ -121,7 +123,7 @@ async def run_listener_mode(config: Config | None = None):
 async def run_processor_mode(config: Config | None = None):
     """Запуск processor (обработка новостей)"""
     external_config = config is not None
-    config = config or load_config()
+    config = config or get_container().config
     if not external_config:
         configure_logging(
             level=config.log_level,
@@ -255,8 +257,11 @@ def main():
     if args.profile:
         os.environ["PROFILE"] = args.profile
 
-    # Загружаем конфигурацию
+    # Инициализируем DI container с конфигурацией
     config = load_config(profile=args.profile)
+    container = ServiceContainer(config=config)
+    set_container(container)  # Устанавливаем как global container
+
     configure_logging(
         level=config.log_level,
         log_file=config.log_file,
