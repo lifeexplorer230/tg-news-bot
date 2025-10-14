@@ -31,6 +31,7 @@ class FakeConfig:
         self.telegram_api_id = 1
         self.telegram_api_hash = "hash"
         self.telegram_phone = "+10000000000"
+        self.db_path = ":memory:"  # Для Database.__init__
 
     def get(self, key, default=None):
         parts = key.split(".")
@@ -47,7 +48,8 @@ class FakeConfig:
 
 
 class DummyDB:
-    def get_today_stats(self):
+    def get_today_stats(self, timezone_name=None):
+        """Mock get_today_stats с поддержкой timezone_name"""
         return {
             "messages_today": 3,
             "processed_today": 2,
