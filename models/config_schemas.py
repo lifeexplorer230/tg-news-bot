@@ -138,8 +138,6 @@ class ListenerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: str = Field(default="subscriptions", pattern="^(subscriptions|manual)$")
-    reconnect_timeout: int = Field(default=30, ge=5, le=600, description="Таймаут переподключения")
-    save_batch_size: int = Field(default=1, ge=1, le=100, description="Размер batch")
     min_message_length: int = Field(default=50, ge=10, le=1000, description="Мин длина сообщения")
     channel_whitelist: List[str] = Field(default_factory=list, description="Whitelist каналов")
     channel_blacklist: List[str] = Field(default_factory=list, description="Blacklist каналов")
@@ -155,7 +153,6 @@ class FiltersConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     exclude_keywords: List[str] = Field(default_factory=list, description="Исключить keywords")
-    include_keywords: List[str] = Field(default_factory=list, description="Включить keywords")
 
 
 class ProcessorConfig(BaseModel):
@@ -218,9 +215,6 @@ class ModerationConfig(BaseModel):
     publish_all_keywords: List[str] = Field(
         default_factory=lambda: ["0", "все", "all"], description="Keywords публикации всех"
     )
-    exclude_keywords: List[str] = Field(
-        default_factory=lambda: ["исключить"], description="Keywords исключения"
-    )
     message: ModerationMessageConfig = Field(
         default_factory=ModerationMessageConfig, description="Настройки сообщений"
     )
@@ -279,25 +273,6 @@ class LoggingConfig(BaseModel):
     )
 
 
-class FeaturesConfig(BaseModel):
-    """Валидация секции features"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    status_report: bool = Field(default=True, description="Включить статус-репорты")
-    cleanup: bool = Field(default=True, description="Включить очистку")
-    embeddings_local_download: bool = Field(default=False, description="Локальное скачивание")
-
-
-class AlertsConfig(BaseModel):
-    """Валидация секции alerts"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = Field(default=False, description="Включить алерты")
-    chat: str = Field(default="", description="Чат для алертов")
-
-
 class AppConfig(BaseModel):
     """
     Главная схема конфигурации приложения (CR-H4)
@@ -328,8 +303,6 @@ class AppConfig(BaseModel):
     cleanup: CleanupConfig = Field(default_factory=CleanupConfig, description="Очистка")
     status: StatusConfig = Field(default_factory=StatusConfig, description="Статус")
     logging: LoggingConfig = Field(default_factory=LoggingConfig, description="Логирование")
-    features: FeaturesConfig = Field(default_factory=FeaturesConfig, description="Фичи")
-    alerts: AlertsConfig = Field(default_factory=AlertsConfig, description="Алерты")
 
     @model_validator(mode="after")
     def validate_schedule_time_format(self) -> AppConfig:
