@@ -568,44 +568,47 @@ class GeminiClient:
             logger.error(f"Ошибка проверки на спам: {e}")
             return False
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((Exception,)),
-        reraise=True,
-    )
-    def select_and_format_marketplace_news(
+    @staticmethod
+    def _chunk_list(items: list, chunk_size: int) -> list[list]:
+        """
+        Разбить список на чанки заданного размера (CR-C6)
+
+        Args:
+            items: Список элементов
+            chunk_size: Размер каждого чанка
+
+        Returns:
+            Список чанков
+        """
+        return [items[i : i + chunk_size] for i in range(0, len(items), chunk_size)]
+
+    def _process_marketplace_chunk(
         self,
         messages: list[dict],
         marketplace: str,
-        top_n: int = 10,
-        marketplace_display_name: str | None = None,
+        chunk_top_n: int,
+        marketplace_display_name: str,
     ) -> list[dict]:
         """
-        Отбор и форматирование новостей для маркетплейсов (Ozon, Wildberries)
+        Обработать один чанк сообщений для маркетплейса (CR-C6 helper)
 
         Args:
-            messages: Список сообщений уже отфильтрованных по ключевым словам
-            marketplace: Название маркетплейса (ozon или wildberries)
-            top_n: Количество новостей для отбора
+            messages: Чанк сообщений
+            marketplace: Название маркетплейса
+            chunk_top_n: Сколько новостей отобрать из чанка
+            marketplace_display_name: Display name для промпта
 
         Returns:
-            Список отформатированных новостей
+            Список отобранных новостей из чанка
         """
-        if not messages:
-            return []
-
-        # Формируем промпт в зависимости от маркетплейса
-        display_name = marketplace_display_name or marketplace.replace("_", " ").title()
-
         messages_block = self._build_messages_block(messages)
 
         prompt = self._render_prompt(
             "select_and_format_marketplace_news",
             DEFAULT_SELECT_MARKETPLACE_NEWS_PROMPT,
-            top_n=top_n,
+            top_n=chunk_top_n,
             messages_block=messages_block,
-            display_name=display_name,
+            display_name=marketplace_display_name,
             marketplace=marketplace,
         )
 
@@ -659,18 +662,83 @@ class GeminiClient:
                     item["text"] = msg["text"]
                     item["marketplace"] = marketplace
 
-            logger.info(
-                f"Gemini отобрал {len(selected)} новостей для {marketplace} из {len(messages)}"
+            logger.debug(
+                f"Chunk: отобрано {len(selected)} новостей из {len(messages)} сообщений"
             )
-            return selected[:top_n]
+            return selected[:chunk_top_n]
 
         except json.JSONDecodeError as e:
             logger.error(f"Ошибка парсинга JSON от Gemini ({marketplace}): {e}")
-            logger.error(f"Текст ответа: {result_text}")
             return []
         except Exception as e:
             logger.error(f"Ошибка при отборе новостей для {marketplace}: {e}")
             return []
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((Exception,)),
+        reraise=True,
+    )
+    def select_and_format_marketplace_news(
+        self,
+        messages: list[dict],
+        marketplace: str,
+        top_n: int = 10,
+        marketplace_display_name: str | None = None,
+        chunk_size: int = 50,
+    ) -> list[dict]:
+        """
+        Отбор и форматирование новостей для маркетплейсов (Ozon, Wildberries)
+
+        С поддержкой chunking (CR-C6): если messages > chunk_size, разбиваем на чанки.
+
+        Args:
+            messages: Список сообщений уже отфильтрованных по ключевым словам
+            marketplace: Название маркетплейса (ozon или wildberries)
+            top_n: Количество новостей для отбора
+            marketplace_display_name: Display name для промпта (опционально)
+            chunk_size: Максимальный размер чанка (по умолчанию 50)
+
+        Returns:
+            Список отформатированных новостей
+        """
+        if not messages:
+            return []
+
+        display_name = marketplace_display_name or marketplace.replace("_", " ").title()
+
+        # CR-C6: Chunking для больших списков сообщений
+        if len(messages) <= chunk_size:
+            # Малый список: обрабатываем за один запрос
+            logger.info(
+                f"Обработка {len(messages)} сообщений для {marketplace} (один запрос)"
+            )
+            return self._process_marketplace_chunk(messages, marketplace, top_n, display_name)
+
+        # Большой список: разбиваем на чанки
+        chunks = self._chunk_list(messages, chunk_size)
+        logger.info(
+            f"CR-C6: Разбиваем {len(messages)} сообщений на {len(chunks)} чанков по {chunk_size} для {marketplace}"
+        )
+
+        all_selected = []
+        for i, chunk in enumerate(chunks, 1):
+            logger.debug(f"Обработка чанка {i}/{len(chunks)} ({len(chunk)} сообщений)")
+            chunk_results = self._process_marketplace_chunk(
+                chunk, marketplace, top_n, display_name
+            )
+            all_selected.extend(chunk_results)
+
+        # Сортируем по score и берем top_n
+        all_selected.sort(key=lambda x: x.get("score", 0), reverse=True)
+        final_results = all_selected[:top_n]
+
+        logger.info(
+            f"CR-C6: Gemini отобрал {len(final_results)} топовых новостей для {marketplace} из {len(messages)} сообщений ({len(chunks)} чанков)"
+        )
+
+        return final_results
 
     @retry(
         stop=stop_after_attempt(3),
