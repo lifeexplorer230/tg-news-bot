@@ -669,6 +669,7 @@
 | 2025-10-15 01:00 | Sprint 2 | CR-C6 | ✅ | Robust LLM завершён (5 коммитов): Part 1 Pydantic schemas (125 lines), Part 2 chunking marketplace (120 lines), Part 3 chunking categories (96 lines), Part 4 валидация+логирование (94 lines), Part 5 tests (258 lines, 11 tests). Итого 74/74 tests, 90% coverage |
 | 2025-10-15 02:00 | Sprint 2 | CR-H4 | ✅ | Валидация конфигурации (Pydantic) завершена (4 коммита): Part 1 models/config_schemas.py (431 lines), Part 2-3 интеграция в utils/config.py + env validation (66 lines), Part 4 tests/test_config_validation.py (298 lines, 11 tests). Дружелюбные ❌ error messages. Итого 85/85 tests, 90% coverage |
 | 2025-10-14 21:45 | Sprint 3 | CR-H2 | ✅ | Timezone-aware система: database/db.py get_today_stats() с timezone_name параметром (53 lines), tests/test_timezone.py (233 lines, 6 tests). Границы дня в локальной TZ, конвертация в UTC. 91/91 tests, coverage database/db.py 90.61% (было 40%) |
+| 2025-10-14 22:30 | Sprint 3 | CR-H3 | ✅ | DI layer (Dependency Injection): 2 коммита (Part 1 ServiceContainer + Part 2 main.py integration). core/container.py (118 lines), tests/test_container.py (181 lines, 9 tests), main.py refactored для get_container().config, test_listener_manual.py исправлен (3 теста). 103/103 tests, coverage 90.61% |
 | | | | | |
 
 **Спринты стабилизации (Code Review):**
