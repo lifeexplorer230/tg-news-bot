@@ -97,8 +97,8 @@ DEFAULT_SELECT_AND_FORMAT_NEWS_PROMPT = """Ты — редактор марке�
 {messages_block}
 
 КРИТЕРИИ:
-ВЫСОКИЙ ПРИОРИТЕТ (9-10) — правила, комиссии, логистика, официальные письма.  
-СРЕДНИЙ (7-8) — кейсы с цифрами, аналитика, инструменты продвижения.  
+ВЫСОКИЙ ПРИОРИТЕТ (9-10) — правила, комиссии, логистика, официальные письма.
+СРЕДНИЙ (7-8) — кейсы с цифрами, аналитика, инструменты продвижения.
 НИЗКИЙ (5-6) — инструкции с конкретными шагами.
 
 ИСКЛЮЧИ: рекламу курсов, накрутки, мотивационные посты без фактов.
@@ -160,12 +160,12 @@ DEFAULT_SELECT_MARKETPLACE_NEWS_PROMPT = """Ты — редактор новос
 
 DEFAULT_SELECT_THREE_CATEGORIES_PROMPT = """Ты — редактор сводного отчёта по маркетплейсам. Разложи новости по категориям:
 
-📦 WILDBERRIES ({wb_count}) — всё, что касается продавцов Wildberries (WB, ВБ, вайлдберриз).  
-📦 OZON ({ozon_count}) — только новости про Ozon.  
+📦 WILDBERRIES ({wb_count}) — всё, что касается продавцов Wildberries (WB, ВБ, вайлдберриз).
+📦 OZON ({ozon_count}) — только новости про Ozon.
 📦 ОБЩИЕ ({general_count}) — законодательство, логистика, тренды, которые влияют на всех.
 
-ВЫСОКИЙ ПРИОРИТЕТ (9-10): правила, комиссии, логистика, официальные письма.  
-СРЕДНИЙ (7-8): кейсы с цифрами, программы поддержки, аналитика.  
+ВЫСОКИЙ ПРИОРИТЕТ (9-10): правила, комиссии, логистика, официальные письма.
+СРЕДНИЙ (7-8): кейсы с цифрами, программы поддержки, аналитика.
 НИЗКИЙ (5-6): инструкции с конкретными шагами.
 
 ИСКЛЮЧИ рекламу курсов, накрутки, мемы.
@@ -266,12 +266,10 @@ class GeminiClient:
     def _build_messages_block(self, messages: list[dict], text_limit: int = 500) -> str:
         parts = []
         for msg in messages:
-            text = (msg.get("text") or "")
+            text = msg.get("text") or ""
             snippet = text[:text_limit]
             channel = msg.get("channel_username", "unknown")
-            parts.append(
-                f"ID: {msg.get('id')}\nКанал: @{channel}\nТекст:\n{snippet}"
-            )
+            parts.append(f"ID: {msg.get('id')}\nКанал: @{channel}\nТекст:\n{snippet}")
         block = "\n\n".join(parts)
         return self._escape_braces(block)
 
@@ -576,9 +574,9 @@ class GeminiClient:
                 msg_id = item["id"]
                 if msg_id in messages_dict:
                     msg = messages_dict[msg_id]
-                    item[
-                        "source_link"
-                    ] = f"https://t.me/{msg['channel_username']}/{msg.get('message_id', '')}"
+                    item["source_link"] = (
+                        f"https://t.me/{msg['channel_username']}/{msg.get('message_id', '')}"
+                    )
                     item["source_message_id"] = msg_id
                     item["source_channel_id"] = msg["channel_id"]
                     item["text"] = msg["text"]  # Для embeddings
@@ -729,17 +727,15 @@ class GeminiClient:
                 msg_id = item["id"]
                 if msg_id in messages_dict:
                     msg = messages_dict[msg_id]
-                    item[
-                        "source_link"
-                    ] = f"https://t.me/{msg['channel_username']}/{msg.get('message_id', '')}"
+                    item["source_link"] = (
+                        f"https://t.me/{msg['channel_username']}/{msg.get('message_id', '')}"
+                    )
                     item["source_message_id"] = msg_id
                     item["source_channel_id"] = msg["channel_id"]
                     item["text"] = msg["text"]
                     item["marketplace"] = marketplace
 
-            logger.debug(
-                f"Chunk: отобрано {len(selected)} новостей из {len(messages)} сообщений"
-            )
+            logger.debug(f"Chunk: отобрано {len(selected)} новостей из {len(messages)} сообщений")
             return selected[:chunk_top_n]
 
         except json.JSONDecodeError as e:
@@ -786,9 +782,7 @@ class GeminiClient:
         # CR-C6: Chunking для больших списков сообщений
         if len(messages) <= chunk_size:
             # Малый список: обрабатываем за один запрос
-            logger.info(
-                f"Обработка {len(messages)} сообщений для {marketplace} (один запрос)"
-            )
+            logger.info(f"Обработка {len(messages)} сообщений для {marketplace} (один запрос)")
             return self._process_marketplace_chunk(messages, marketplace, top_n, display_name)
 
         # Большой список: разбиваем на чанки
@@ -800,9 +794,7 @@ class GeminiClient:
         all_selected = []
         for i, chunk in enumerate(chunks, 1):
             logger.debug(f"Обработка чанка {i}/{len(chunks)} ({len(chunk)} сообщений)")
-            chunk_results = self._process_marketplace_chunk(
-                chunk, marketplace, top_n, display_name
-            )
+            chunk_results = self._process_marketplace_chunk(chunk, marketplace, top_n, display_name)
             all_selected.extend(chunk_results)
 
         # Сортируем по score и берем top_n
@@ -897,9 +889,9 @@ class GeminiClient:
                     msg_id = item["id"]
                     if msg_id in messages_dict:
                         msg = messages_dict[msg_id]
-                        item[
-                            "source_link"
-                        ] = f"https://t.me/{msg['channel_username']}/{msg.get('message_id', '')}"
+                        item["source_link"] = (
+                            f"https://t.me/{msg['channel_username']}/{msg.get('message_id', '')}"
+                        )
                         item["source_message_id"] = msg_id
                         item["source_channel_id"] = msg["channel_id"]
                         item["text"] = msg["text"]
@@ -956,9 +948,7 @@ class GeminiClient:
         # CR-C6: Chunking для больших списков сообщений
         if len(messages) <= chunk_size:
             # Малый список: обрабатываем за один запрос
-            logger.info(
-                f"Обработка {len(messages)} сообщений для 3 категорий (один запрос)"
-            )
+            logger.info(f"Обработка {len(messages)} сообщений для 3 категорий (один запрос)")
             return self._process_categories_chunk(messages, wb_count, ozon_count, general_count)
 
         # Большой список: разбиваем на чанки

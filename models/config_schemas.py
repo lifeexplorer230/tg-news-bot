@@ -7,7 +7,7 @@ Pydantic schemas для валидации конфигурации (CR-H4)
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import List
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -38,12 +38,8 @@ class DatabaseRetryConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     max_attempts: int = Field(default=5, ge=1, le=20, description="Максимум попыток")
-    base_delay_seconds: float = Field(
-        default=0.5, ge=0.1, le=10.0, description="Базовая задержка"
-    )
-    backoff_multiplier: float = Field(
-        default=1.0, ge=1.0, le=5.0, description="Множитель задержки"
-    )
+    base_delay_seconds: float = Field(default=0.5, ge=0.1, le=10.0, description="Базовая задержка")
+    backoff_multiplier: float = Field(default=1.0, ge=1.0, le=5.0, description="Множитель задержки")
 
 
 class DatabaseConfig(BaseModel):
@@ -52,9 +48,7 @@ class DatabaseConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0, description="Таймаут БД")
-    busy_timeout_ms: int = Field(
-        default=30000, ge=1000, le=60000, description="Таймаут busy"
-    )
+    busy_timeout_ms: int = Field(default=30000, ge=1000, le=60000, description="Таймаут busy")
     retry: DatabaseRetryConfig = Field(
         default_factory=DatabaseRetryConfig, description="Настройки retry"
     )
@@ -160,11 +154,11 @@ class ProcessorConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schedule_time: str = Field(default="09:00", pattern=r"^\d{2}:\d{2}$", description="Время запуска")
-    timezone: str = Field(default="Europe/Moscow", description="Часовой пояс")
-    duplicate_threshold: float = Field(
-        default=0.85, ge=0.5, le=1.0, description="Порог дубликатов"
+    schedule_time: str = Field(
+        default="09:00", pattern=r"^\d{2}:\d{2}$", description="Время запуска"
     )
+    timezone: str = Field(default="Europe/Moscow", description="Часовой пояс")
+    duplicate_threshold: float = Field(default=0.85, ge=0.5, le=1.0, description="Порог дубликатов")
     top_n: int = Field(default=10, ge=1, le=100, description="Топ N новостей")
     exclude_count: int = Field(default=5, ge=0, le=50, description="Количество исключений")
 
@@ -294,12 +288,8 @@ class AppConfig(BaseModel):
     listener: ListenerConfig = Field(default_factory=ListenerConfig, description="Listener")
     filters: FiltersConfig = Field(default_factory=FiltersConfig, description="Фильтры")
     processor: ProcessorConfig = Field(default_factory=ProcessorConfig, description="Processor")
-    embeddings: EmbeddingsConfig = Field(
-        default_factory=EmbeddingsConfig, description="Embeddings"
-    )
-    moderation: ModerationConfig = Field(
-        default_factory=ModerationConfig, description="Модерация"
-    )
+    embeddings: EmbeddingsConfig = Field(default_factory=EmbeddingsConfig, description="Embeddings")
+    moderation: ModerationConfig = Field(default_factory=ModerationConfig, description="Модерация")
     cleanup: CleanupConfig = Field(default_factory=CleanupConfig, description="Очистка")
     status: StatusConfig = Field(default_factory=StatusConfig, description="Статус")
     logging: LoggingConfig = Field(default_factory=LoggingConfig, description="Логирование")
@@ -323,9 +313,7 @@ class AppConfig(BaseModel):
             )
 
         if not (0 <= hours <= 23):
-            raise ValueError(
-                f"processor.schedule_time: часы должны быть 0-23, получено: {hours}"
-            )
+            raise ValueError(f"processor.schedule_time: часы должны быть 0-23, получено: {hours}")
 
         if not (0 <= minutes <= 59):
             raise ValueError(
@@ -345,7 +333,9 @@ class EnvConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     TELEGRAM_API_ID: int = Field(..., gt=0, description="Telegram API ID")
-    TELEGRAM_API_HASH: str = Field(..., min_length=32, max_length=32, description="Telegram API Hash")
+    TELEGRAM_API_HASH: str = Field(
+        ..., min_length=32, max_length=32, description="Telegram API Hash"
+    )
     TELEGRAM_PHONE: str = Field(..., pattern=r"^\+?\d{10,15}$", description="Telegram Phone")
     GEMINI_API_KEY: str = Field(..., min_length=20, description="Gemini API Key")
     MY_CHANNEL: str = Field(default="", description="Канал для публикации")
@@ -378,18 +368,14 @@ class EnvConfig(BaseModel):
     def validate_phone(cls, v: str) -> str:
         """Валидация TELEGRAM_PHONE"""
         if not v.startswith("+"):
-            raise ValueError(
-                f"TELEGRAM_PHONE должен начинаться с '+', получено: {v}"
-            )
+            raise ValueError(f"TELEGRAM_PHONE должен начинаться с '+', получено: {v}")
         digits = v.replace("+", "")
         if not digits.isdigit():
             raise ValueError(
                 f"TELEGRAM_PHONE должен содержать только цифры после '+', получено: {v}"
             )
         if not (10 <= len(digits) <= 15):
-            raise ValueError(
-                f"TELEGRAM_PHONE должен содержать 10-15 цифр, получено: {len(digits)}"
-            )
+            raise ValueError(f"TELEGRAM_PHONE должен содержать 10-15 цифр, получено: {len(digits)}")
         return v
 
     @field_validator("GEMINI_API_KEY")
