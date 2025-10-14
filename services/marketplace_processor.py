@@ -308,6 +308,7 @@ class MarketplaceProcessor:
         Фильтрация дубликатов через embeddings
 
         Оптимизировано (CR-H1): загружаем published_embeddings один раз и кэшируем
+        Оптимизировано (CR-C5): используем batch encoding вместо последовательного encode
 
         Returns:
             Tuple of (unique_messages, rejected_reasons)
@@ -316,6 +317,9 @@ class MarketplaceProcessor:
         unique = []
         rejected = {}
 
+        if not messages:
+            return unique, rejected
+
         # CR-H1: Загружаем published embeddings один раз и кэшируем
         if self._cached_published_embeddings is None:
             self._cached_published_embeddings = self.db.get_published_embeddings(days=60)
@@ -323,10 +327,13 @@ class MarketplaceProcessor:
 
         published_embeddings = self._cached_published_embeddings
 
-        for msg in messages:
-            # Генерируем embedding
-            embedding = self.embeddings.encode(msg["text"])
+        # CR-C5: Батчевое кодирование всех сообщений сразу (async, non-blocking)
+        texts = [msg["text"] for msg in messages]
+        embeddings_array = await self.embeddings.encode_batch_async(texts, batch_size=32)
+        logger.debug(f"CR-C5: Batch encoded {len(texts)} messages (shape: {embeddings_array.shape})")
 
+        # Проверяем каждое сообщение на дубликаты
+        for msg, embedding in zip(messages, embeddings_array):
             # Проверяем на дубликаты (inline вместо db.check_duplicate)
             is_duplicate = self._check_duplicate_inline(
                 embedding, published_embeddings, self.duplicate_threshold
