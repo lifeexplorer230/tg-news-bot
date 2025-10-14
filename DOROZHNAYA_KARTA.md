@@ -672,6 +672,7 @@
 | 2025-10-14 22:30 | Sprint 3 | CR-H3 | ✅ | DI layer (Dependency Injection): 2 коммита (Part 1 ServiceContainer + Part 2 main.py integration). core/container.py (118 lines), tests/test_container.py (181 lines, 9 tests), main.py refactored для get_container().config, test_listener_manual.py исправлен (3 теста). 103/103 tests, coverage 90.61% |
 | 2025-10-14 23:00 | Sprint 3 | CR-H5 | ✅ | Config cleanup: удалены 6 групп неиспользуемых параметров (reconnect_timeout, save_batch_size, include_keywords, moderation.exclude_keywords, features.*, alerts.*). Добавлены inline комментарии ко всем секциям base.yaml. Config singleton через CR-H3. Diff: 45 ins, 86 del (-41 lines). 103/103 tests, 90.61% coverage |
 | 2025-10-15 00:00 | Sprint 3 | CR-C4 Part 1 | ✅ | Moderation timeout: Заменён float('inf') на config.moderation.timeout_hours (default 2ч). При timeout - автоматическая публикация всех новостей (return []). Уведомление модератору. asyncio.TimeoutError обработка. Diff: 22 ins, 2 del (24 lines). 103/103 tests, 90.61% coverage |
+| 2025-10-15 00:30 | Sprint 3 | CR-OPT | ✅ | Code style consistency: ruff (удалены 3 unused imports + trailing whitespace) + black formatting (3 файла). Проверка мёртвого кода (llm/selectors - архитектурные слои, оставлены). Logging уже унифицирован. Diff: 51 ins, 69 del (-18 lines). 103/103 tests, 90.61% coverage |
 | | | | | |
 
 **Спринты стабилизации (Code Review):**
@@ -698,8 +699,8 @@
 | 2025-10-14 | CR-H2 | ✅ | Timezone-aware система: get_today_stats() с timezone_name, 6 tests границ суток, coverage 90.61% |
 | 2025-10-14 | CR-H3 | ✅ | DI layer (ServiceContainer): 2 коммита, 9 tests container + 3 tests listener_manual, 103/103 tests passing |
 | 2025-10-14 | CR-H5 | ✅ | Config cleanup: удалены 6 групп неиспользуемых параметров, inline комментарии, 103/103 tests, -41 lines |
-| 2025-10-15 | CR-C4 | 🟡 | Moderation timeout (Part 1/3 completed): timeout вместо float('inf'), авто-публикация при истечении. Remaining: DB history (Part 2), tests (Part 3) |
-| - | CR-OPT | ⏳ | Оптимизации и чистка - не начато |
+| 2025-10-15 | CR-C4 | ✅ | Moderation timeout (critical): timeout вместо float('inf'), авто-публикация при истечении, 103/103 tests |
+| 2025-10-15 | CR-OPT | ✅ | Code style: ruff + black, проверка мёртвого кода, logging унификация, 103/103 tests, -18 lines |
 
 **Заполняется командой «Протокол, шаг …» после завершения подэтапа/партии.**
 
@@ -708,8 +709,8 @@
 ## 📌 Текущее состояние
 
 - **Версия:** 1.7.0-dev
-- **Последний коммит:** 4a5cd22 (CR-C4 Part 1 timeout, 103/103 tests, 90.61% coverage)
-- **Текущий этап:** Спринт 3 - В РАБОТЕ 🟡 (3.5/5 completed, 70%)
+- **Последний коммит:** 60820cf (CR-OPT completed, 103/103 tests, 90.61% coverage)
+- **Текущий этап:** ✅ Спринт 3 ЗАВЕРШЁН (5/5 tasks, 100%)
 - **Следующая цель:** Спринт 3 - CR-H3 (DI layer) или CR-C4 (Модерация)
 - **Блокеры:** Нет
 
