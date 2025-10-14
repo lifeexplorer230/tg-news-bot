@@ -63,7 +63,7 @@ class NewsProcessor:
             try:
                 category = Category(**data)
             except TypeError as exc:
-                logger.error(f"Некорректная конфигурация маркетплейса {mp_cfg}: {exc}")
+                logger.error(f"Некорректная конфигурация категории {mp_cfg}: {exc}")
                 continue
             category.combined_exclude_keywords_lower = list(
                 dict.fromkeys(category.exclude_keywords_lower + self.global_exclude_keywords)
@@ -71,7 +71,7 @@ class NewsProcessor:
             self.categories[category.name] = category
 
         if not self.categories:
-            logger.warning("В конфигурации не найдено ни одного маркетплейса")
+            logger.warning("В конфигурации не найдено ни одной категории")
 
         self.all_exclude_keywords_lower = set(self.global_exclude_keywords)
         for category in self.categories.values():
@@ -96,7 +96,7 @@ class NewsProcessor:
 
         self.publication_header_template = config.get(
             "publication.header_template",
-            "📌 Главные новости маркетплейсов за {date}",
+            "📰 Главные новости за {date}",
         )
         self.publication_footer_template = config.get("publication.footer_template", "")
         self.publication_preview_channel = config.get("publication.preview_channel")
@@ -145,29 +145,29 @@ class NewsProcessor:
         self, marketplace: str, client: TelegramClient, base_messages: list[dict] | None = None
     ):
         """
-        Обработка новостей для конкретного маркетплейса
+        Обработка новостей для конкретной категории
 
         Args:
-            marketplace: Название маркетплейса
+            marketplace: Название категории (параметр сохранён для backwards compatibility)
             client: Telegram client
             base_messages: Кэшированные сообщения (оптимизация CR-H1). Если None - загружаются из БД
         """
 
         if marketplace not in self.categories:
-            logger.error(f"Неизвестный маркетплейс: {marketplace}")
+            logger.error(f"Неизвестная категория: {marketplace}")
             return
 
         mp_config = self.categories.get(marketplace)
         if mp_config is None:
-            logger.error(f"Маркетплейс {marketplace} отсутствует в конфигурации")
+            logger.error(f"Категория {marketplace} отсутствует в конфигурации")
             return
 
         if not mp_config.enabled:
-            logger.info(f"Маркетплейс {marketplace} отключен в конфиге")
+            logger.info(f"Категория {marketplace} отключена в конфиге")
             return
 
         logger.info("=" * 80)
-        logger.info(f"🛒 ОБРАБОТКА НОВОСТЕЙ: {marketplace.upper()}")
+        logger.info(f"📰 ОБРАБОТКА КАТЕГОРИИ: {marketplace.upper()}")
         logger.info("=" * 80)
 
         # ШАГ 1: Загружаем сообщения (из кэша или БД)
@@ -543,9 +543,9 @@ class NewsProcessor:
         await self.publish_digest(
             client,
             approved_posts,
-            "маркетплейсы",
+            "категории",
             target_channel,
-            display_name="Маркетплейсы",
+            display_name="Категории",
         )
 
         # ШАГ 7: Помечаем все отфильтрованные сообщения как processed
@@ -966,11 +966,11 @@ class NewsProcessor:
         logger.info(f"💾 Сохранено {len(posts)} embeddings в БД")
 
     async def run(self, use_categories=True):
-        """Запуск обработки для всех маркетплейсов
+        """Запуск обработки для всех категорий
 
         Args:
             use_categories: Если True - использует новую 3-категорийную систему (5+5+5=15, выбор 10)
-                           Если False - использует старую систему (отдельно Ozon и WB)
+                           Если False - использует старую систему (обработка каждой категории отдельно)
         """
 
         # Подключаемся к Telegram с использованием основной сессии
@@ -987,12 +987,12 @@ class NewsProcessor:
                 # НОВАЯ СИСТЕМА: 3 категории (WB + Ozon + Общие)
                 await self.process_all_categories(client)
             else:
-                # СТАРАЯ СИСТЕМА: Обрабатываем каждый маркетплейс отдельно
+                # СТАРАЯ СИСТЕМА: Обрабатываем каждую категорию отдельно
 
-                # CR-H1: Загружаем сообщения ОДИН раз для всех маркетплейсов
+                # CR-H1: Загружаем сообщения ОДИН раз для всех категорий
                 base_messages = self.db.get_unprocessed_messages(hours=24)
                 logger.info(
-                    f"📦 CR-H1: Загружено {len(base_messages)} сообщений (будут переиспользованы для {len(self.category_names)} маркетплейсов)"
+                    f"📦 CR-H1: Загружено {len(base_messages)} сообщений (будут переиспользованы для {len(self.category_names)} категорий)"
                 )
 
                 for category_name in self.category_names:
