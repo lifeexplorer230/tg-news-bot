@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pickle  # nosec B403
 import sqlite3
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -71,6 +72,8 @@ class Database:
         self._retry_backoff_multiplier = max(0.0, float(retry_backoff_multiplier)) or 1.0
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.conn: sqlite3.Connection | None = None
+        self._lock = threading.Lock()  # Thread safety для write operations
+        self._closed = False  # Track if connection was explicitly closed
         self.init_db()
 
     def connect(self):
@@ -515,8 +518,32 @@ class Database:
         return stats
 
     def close(self):
-        """Закрыть соединение с БД"""
-        if self.conn:
-            self.conn.close()
-            self.conn = None
-            logger.info("Соединение с БД закрыто")
+        """Закрыть соединение с БД (idempotent, thread-safe)"""
+        with self._lock:
+            if self._closed:
+                return  # Already closed
+            if self.conn:
+                try:
+                    self.conn.close()
+                    logger.info("Соединение с БД закрыто")
+                except Exception as e:
+                    logger.error(f"Ошибка при закрытии соединения: {e}")
+                finally:
+                    self.conn = None
+                    self._closed = True
+
+    def __enter__(self):
+        """Context manager support"""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager cleanup"""
+        self.close()
+        return False
+
+    def __del__(self):
+        """Cleanup on garbage collection"""
+        try:
+            self.close()
+        except Exception:
+            pass  # Suppress errors during cleanup
