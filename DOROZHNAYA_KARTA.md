@@ -665,6 +665,7 @@
 | 2025-10-14 22:30 | Sprint 1 | CR-C3 | ✅ | SQLite lifecycle и concurrency (2 коммита: Part 1 context manager + Part 2 per-component db, 51/51 tests, 90% coverage) |
 | 2025-10-14 23:00 | Sprint 1 | CR-C7 | ✅ | Adaptive scheduler с schedule.idle_seconds() и safety sleep (6/6 tests, 57/57 total, 90% coverage) |
 | 2025-10-14 23:30 | Sprint 2 | CR-H1 | ✅ | Оптимизация чтения сообщений: кэш published_embeddings + base_messages, inline duplicate check (90 lines, 57/57 tests, 90% coverage, 2x+ ускорение) |
+| 2025-10-15 00:30 | Sprint 2 | CR-C5 | ✅ | Batch embeddings и async дедупликация: 5 коммитов (Part 1-5), async wrappers + batch encoding + batch similarity + tests (63/63 tests, 90% coverage, 5-10x ускорение) |
 | | | | | |
 
 **Спринты стабилизации (Code Review):**
@@ -681,7 +682,7 @@
 | Дата | Задача | Статус | Комментарий |
 |------|--------|--------|-------------|
 | 2025-10-14 | CR-H1 | ✅ | Оптимизация чтения сообщений: кэш published_embeddings + base_messages, inline check (90 lines, 2x+ speedup) |
-| - | CR-C5 | ⏳ | Batch embeddings и async дедупликация - не начато |
+| 2025-10-15 | CR-C5 | ✅ | Batch embeddings и async дедупликация (5 коммитов: async wrappers, batch in filter_duplicates, batch in publish, batch similarity, tests + pytest-asyncio) |
 | - | CR-C6 | ⏳ | Robust LLM (JSON validation, retry, chunking) - не начато |
 | - | CR-H4 | ⏳ | Валидация конфигурации (Pydantic) - не начато |
 
@@ -700,25 +701,26 @@
 
 ## 📌 Текущее состояние
 
-- **Версия:** 1.4.0-dev
-- **Последний коммит:** CR-H1 completed (optimize message reading, 57/57 tests, 90% coverage)
-- **Текущий этап:** Спринт 2 - В процессе 🟡 (1/4 completed, 25%)
-- **Следующая цель:** CR-C5 (Batch embeddings и async дедупликация)
+- **Версия:** 1.5.0-dev
+- **Последний коммит:** CR-C5 completed (batch embeddings + async, 63/63 tests, 90% coverage)
+- **Текущий этап:** Спринт 2 - В процессе 🟡 (2/4 completed, 50%)
+- **Следующая цель:** CR-C6 (Robust LLM - JSON validation, retry, chunking)
 - **Блокеры:** Нет
 
 **Готовность компонентов:**
 - ✅ Listener — базовая функциональность работает, создает свой DB
 - ✅ Processor — базовая функциональность работает, создает свой DB + оптимизация чтения (CR-H1)
+- ✅ Embeddings — lazy loading + async wrappers + batch encoding + batch similarity (CR-C5)
 - ✅ Database — SQLite с WAL mode + context manager + per-component instances
 - ✅ Scheduler — adaptive idle через schedule.idle_seconds() + safety sleep
 - ✅ FloodWait protection — safe_connect() применен
-- ✅ Тесты — 57/57 passing, 90% coverage
+- ✅ Тесты — 63/63 passing, 90% coverage (+6 новых async/batch тестов)
 - ⏳ CI/CD — не настроен
 - ⏳ Monitoring — минимальный (healthcheck)
 
 **Новые спринты (Code Review):**
 - ✅ Спринт 1: 4 критических блокера ЗАВЕРШЕН (CR-C1 ✅, CR-C2 ✅, CR-C3 ✅, CR-C7 ✅)
-- 🟡 Спринт 2: 4 высокоприоритетных задачи - 1/4 ЗАВЕРШЕНО (CR-H1 ✅, CR-C5 ⏳, CR-C6 ⏳, CR-H4 ⏳)
+- 🟡 Спринт 2: 4 высокоприоритетных задачи - 2/4 ЗАВЕРШЕНО (CR-H1 ✅, CR-C5 ✅, CR-C6 ⏳, CR-H4 ⏳)
 - 🟢 Спринт 3: 5 задач качества/масштаба (CR-H2, CR-H3, CR-H5, CR-C4, CR-OPT)
 
 ---
