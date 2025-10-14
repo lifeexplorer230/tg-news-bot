@@ -89,7 +89,7 @@ def make_processor(messages, moderation_enabled=False):
     processor.all_exclude_keywords_lower = {"spam"}
 
     async def fake_filter_duplicates(msgs):
-        return list(msgs)
+        return list(msgs), {}
 
     async def fake_publish_digest(*args, **kwargs):
         return None

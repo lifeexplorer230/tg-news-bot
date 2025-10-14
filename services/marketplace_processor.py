@@ -349,30 +349,42 @@ class MarketplaceProcessor:
             logger.info("Нет новых сообщений")
             return
 
-        # ШАГ 2: Фильтруем по глобальным исключающим словам и сразу отмечаем отклонённые
+        # Словарь для отслеживания причин отклонения
+        all_rejected = {}
+
+        # ШАГ 2: Фильтруем по глобальным исключающим словам
         filtered_messages = []
         for msg in base_messages:
             text_lower = msg["text"].lower()
             if self.all_exclude_keywords_lower and any(
                 exclude in text_lower for exclude in self.all_exclude_keywords_lower
             ):
-                self.db.mark_as_processed(
-                    msg["id"], rejection_reason="rejected_by_exclude_keywords"
-                )
+                all_rejected[msg["id"]] = "rejected_by_exclude_keywords"
                 continue
             filtered_messages.append(msg)
 
         logger.info(f"После фильтрации исключений: {len(filtered_messages)} сообщений")
 
         if not filtered_messages:
+            # Помечаем отфильтрованные как processed
+            for msg_id, reason in all_rejected.items():
+                self.db.mark_as_processed(msg_id, rejection_reason=reason)
             logger.info("Нет сообщений после фильтрации исключений")
             return
 
         # ШАГ 3: Проверка дубликатов
-        unique_messages = await self.filter_duplicates(filtered_messages)
+        unique_messages, rejected_duplicates = await self.filter_duplicates(filtered_messages)
+        all_rejected.update(rejected_duplicates)
         logger.info(f"После проверки дубликатов: {len(unique_messages)} уникальных")
 
         if not unique_messages:
+            # Помечаем все отфильтрованные как processed
+            for msg_id, reason in all_rejected.items():
+                self.db.mark_as_processed(
+                    msg_id,
+                    is_duplicate=(reason == "is_duplicate"),
+                    rejection_reason=reason
+                )
             logger.warning("Все сообщения являются дубликатами")
             return
 
@@ -461,6 +473,14 @@ class MarketplaceProcessor:
             target_channel,
             display_name="Маркетплейсы",
         )
+
+        # ШАГ 7: Помечаем все отфильтрованные сообщения как processed
+        for msg_id, reason in all_rejected.items():
+            self.db.mark_as_processed(
+                msg_id,
+                is_duplicate=(reason == "is_duplicate"),
+                rejection_reason=reason
+            )
 
         logger.info("✅ Обработка всех категорий завершена!")
 
