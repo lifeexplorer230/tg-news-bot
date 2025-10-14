@@ -1,5 +1,6 @@
 """Обработчик новостей маркетплейсов с поддержкой Ozon и Wildberries"""
 
+import asyncio
 from datetime import timedelta
 
 import numpy as np
@@ -118,6 +119,7 @@ class MarketplaceProcessor:
             )
             self.processor_exclude_count = 5
         self.moderation_enabled = config.get("moderation.enabled", True)
+        self.moderation_timeout_hours = config.get("moderation.timeout_hours", 2)
 
     @property
     def embeddings(self) -> EmbeddingService:
@@ -648,8 +650,11 @@ class MarketplaceProcessor:
                 await conv.send_message(message)
                 logger.info(f"✅ Сообщение отправлено модератору {personal_account}")
 
-                # Ждем ответа (бесконечное ожидание)
-                response = await conv.get_response(timeout=float('inf'))
+                # Ждем ответа с таймаутом (в секундах)
+                timeout_seconds = self.moderation_timeout_hours * 3600
+                logger.info(f"⏰ Ожидание ответа модератора (timeout: {self.moderation_timeout_hours}ч)")
+
+                response = await conv.get_response(timeout=timeout_seconds)
                 response_text = response.message.strip().lower()
 
                 logger.info(f"📨 Получен ответ модератора: {response_text}")
@@ -693,6 +698,21 @@ class MarketplaceProcessor:
                     f"Будет опубликовано: {total_posts - len(excluded_ids)} новостей"
                 )
                 return excluded_ids
+
+            except asyncio.TimeoutError:
+                # Timeout модерации - автоматически публикуем все новости
+                logger.warning(
+                    f"⏰ Timeout модерации ({self.moderation_timeout_hours}ч) - "
+                    f"автоматическая публикация всех {total_posts} новостей"
+                )
+                try:
+                    await conv.send_message(
+                        f"⏰ Время модерации истекло ({self.moderation_timeout_hours}ч)\n"
+                        f"✅ Все {total_posts} новостей будут опубликованы автоматически"
+                    )
+                except Exception:
+                    pass  # Игнорируем ошибки отправки уведомления
+                return []  # Пустой список = опубликовать все
 
             except Exception as e:
                 logger.error(f"Ошибка при ожидании ответа модератора: {e}", exc_info=True)
