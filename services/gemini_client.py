@@ -6,6 +6,7 @@ import json
 import re
 import threading
 import time
+import uuid
 from typing import Callable, Optional
 
 import google.generativeai as genai
@@ -274,7 +275,72 @@ class GeminiClient:
         block = "\n\n".join(parts)
         return self._escape_braces(block)
 
-    def _log_api_call(self, method_name: str, prompt: str, response_text: str, duration: float):
+    @staticmethod
+    def _generate_request_id() -> str:
+        """
+        Генерация уникального ID для трассировки запроса (CR-C6)
+
+        Returns:
+            Короткий уникальный ID (8 символов)
+        """
+        return str(uuid.uuid4())[:8]
+
+    @staticmethod
+    def _estimate_prompt_tokens(prompt: str) -> int:
+        """
+        Оценка количества токенов в промпте (CR-C6)
+
+        Примерная оценка: 1 токен ≈ 4 символа для русского текста.
+
+        Args:
+            prompt: Промпт для оценки
+
+        Returns:
+            Примерное количество токенов
+        """
+        return len(prompt) // 4
+
+    def _validate_prompt_size(
+        self, prompt: str, max_tokens: int = 30000, method_name: str = "unknown"
+    ) -> bool:
+        """
+        Валидация размера промпта с предупреждениями (CR-C6)
+
+        Args:
+            prompt: Промпт для валидации
+            max_tokens: Максимальное количество токенов (по умолчанию 30k)
+            method_name: Название метода для логирования
+
+        Returns:
+            True если размер приемлем, False если превышен лимит
+        """
+        estimated_tokens = self._estimate_prompt_tokens(prompt)
+
+        if estimated_tokens > max_tokens:
+            logger.warning(
+                f"[CR-C6] {method_name}: Промпт слишком большой! "
+                f"Estimated {estimated_tokens} tokens (max {max_tokens}). "
+                f"Prompt size: {len(prompt)} chars. Consider using chunking."
+            )
+            return False
+
+        if estimated_tokens > max_tokens * 0.8:
+            logger.info(
+                f"[CR-C6] {method_name}: Промпт близок к лимиту. "
+                f"Estimated {estimated_tokens} tokens (80% of {max_tokens}). "
+                f"Prompt size: {len(prompt)} chars."
+            )
+
+        return True
+
+    def _log_api_call(
+        self,
+        method_name: str,
+        prompt: str,
+        response_text: str,
+        duration: float,
+        request_id: str | None = None,
+    ):
         """
         Детальное логирование вызова Gemini API
 
@@ -283,29 +349,33 @@ class GeminiClient:
             prompt: Отправленный промпт
             response_text: Полученный ответ
             duration: Время выполнения в секундах
+            request_id: Уникальный ID запроса для трассировки (опционально, CR-C6)
         """
+        # Формируем префикс с request_id если есть
+        prefix = f"[Gemini][{request_id}]" if request_id else "[Gemini]"
+
         # Логируем метаданные
         logger.info(
-            f"[Gemini] {method_name}: промпт {len(prompt)} символов, "
+            f"{prefix} {method_name}: промпт {len(prompt)} символов, "
             f"ответ {len(response_text)} символов, время {duration:.2f}s"
         )
 
         # Логируем промпт (с ограничением)
         max_log_length = 2000
         if len(prompt) <= max_log_length:
-            logger.debug(f"[Gemini] {method_name} ПРОМПТ:\n{prompt}")
+            logger.debug(f"{prefix} {method_name} ПРОМПТ:\n{prompt}")
         else:
             logger.debug(
-                f"[Gemini] {method_name} ПРОМПТ (обрезан до {max_log_length} символов):\n"
+                f"{prefix} {method_name} ПРОМПТ (обрезан до {max_log_length} символов):\n"
                 f"{prompt[:max_log_length]}..."
             )
 
         # Логируем полный ответ (с ограничением)
         if len(response_text) <= max_log_length:
-            logger.debug(f"[Gemini] {method_name} ОТВЕТ:\n{response_text}")
+            logger.debug(f"{prefix} {method_name} ОТВЕТ:\n{response_text}")
         else:
             logger.debug(
-                f"[Gemini] {method_name} ОТВЕТ (обрезан до {max_log_length} символов):\n"
+                f"{prefix} {method_name} ОТВЕТ (обрезан до {max_log_length} символов):\n"
                 f"{response_text[:max_log_length]}..."
             )
 
@@ -601,6 +671,9 @@ class GeminiClient:
         Returns:
             Список отобранных новостей из чанка
         """
+        # CR-C6: Генерация request_id для трассировки
+        request_id = self._generate_request_id()
+
         messages_block = self._build_messages_block(messages)
 
         prompt = self._render_prompt(
@@ -612,6 +685,10 @@ class GeminiClient:
             marketplace=marketplace,
         )
 
+        # CR-C6: Валидация размера промпта
+        method_name = f"select_marketplace_news[{marketplace}]"
+        self._validate_prompt_size(prompt, max_tokens=30000, method_name=method_name)
+
         try:
             start_time = time.time()
             model = self._ensure_model()
@@ -619,10 +696,8 @@ class GeminiClient:
             result_text = response.text.strip()
             duration = time.time() - start_time
 
-            # Детальное логирование
-            self._log_api_call(
-                f"select_marketplace_news[{marketplace}]", prompt, result_text, duration
-            )
+            # CR-C6: Детальное логирование с request_id
+            self._log_api_call(method_name, prompt, result_text, duration, request_id)
 
             # Удаляем markdown разметку если есть
             if result_text.startswith("```"):
@@ -759,6 +834,9 @@ class GeminiClient:
         Returns:
             Dict с ключами 'wildberries', 'ozon', 'general'
         """
+        # CR-C6: Генерация request_id для трассировки
+        request_id = self._generate_request_id()
+
         messages_block = self._build_messages_block(messages)
 
         prompt = self._render_prompt(
@@ -770,6 +848,10 @@ class GeminiClient:
             messages_block=messages_block,
         )
 
+        # CR-C6: Валидация размера промпта
+        method_name = "select_three_categories[chunk]"
+        self._validate_prompt_size(prompt, max_tokens=30000, method_name=method_name)
+
         try:
             start_time = time.time()
             model = self._ensure_model()
@@ -777,8 +859,8 @@ class GeminiClient:
             result_text = response.text.strip()
             duration = time.time() - start_time
 
-            # Детальное логирование
-            self._log_api_call("select_three_categories[chunk]", prompt, result_text, duration)
+            # CR-C6: Детальное логирование с request_id
+            self._log_api_call(method_name, prompt, result_text, duration, request_id)
 
             # Удаляем markdown разметку
             if result_text.startswith("```"):
