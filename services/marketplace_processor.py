@@ -945,9 +945,12 @@ class MarketplaceProcessor:
             except Exception as exc:  # noqa: BLE001
                 logger.error("Не удалось отправить уведомление %s: %s", notify_account, exc)
 
-        # Сохраняем embeddings
-        for post in posts:
-            embedding = self.embeddings.encode(post["text"])
+        # Сохраняем embeddings (CR-C5: batch encoding)
+        texts = [post["text"] for post in posts]
+        embeddings_array = await self.embeddings.encode_batch_async(texts, batch_size=32)
+        logger.debug(f"CR-C5: Batch encoded {len(texts)} posts for saving")
+
+        for post, embedding in zip(posts, embeddings_array):
             self.db.save_published(
                 text=post["text"],
                 embedding=embedding,
