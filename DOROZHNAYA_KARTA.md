@@ -666,7 +666,7 @@
 | 2025-10-14 23:00 | Sprint 1 | CR-C7 | ✅ | Adaptive scheduler с schedule.idle_seconds() и safety sleep (6/6 tests, 57/57 total, 90% coverage) |
 | 2025-10-14 23:30 | Sprint 2 | CR-H1 | ✅ | Оптимизация чтения сообщений: кэш published_embeddings + base_messages, inline duplicate check (90 lines, 57/57 tests, 90% coverage, 2x+ ускорение) |
 | 2025-10-15 00:30 | Sprint 2 | CR-C5 | ✅ | Batch embeddings и async дедупликация: 5 коммитов (Part 1-5), async wrappers + batch encoding + batch similarity + tests (63/63 tests, 90% coverage, 5-10x ускорение) |
-| 2025-10-15 01:00 | Sprint 2 | CR-C6 | 🔄 | Robust LLM - Part 1/5 завершено: Pydantic schemas для всех типов ответов (models/llm_schemas.py, 125 lines). Осталось: chunking + валидация + логирование + тесты |
+| 2025-10-15 01:00 | Sprint 2 | CR-C6 | ✅ | Robust LLM завершён (5 коммитов): Part 1 Pydantic schemas (125 lines), Part 2 chunking marketplace (120 lines), Part 3 chunking categories (96 lines), Part 4 валидация+логирование (94 lines), Part 5 tests (258 lines, 11 tests). Итого 74/74 tests, 90% coverage |
 | | | | | |
 
 **Спринты стабилизации (Code Review):**
@@ -684,7 +684,7 @@
 |------|--------|--------|-------------|
 | 2025-10-14 | CR-H1 | ✅ | Оптимизация чтения сообщений: кэш published_embeddings + base_messages, inline check (90 lines, 2x+ speedup) |
 | 2025-10-15 | CR-C5 | ✅ | Batch embeddings и async дедупликация (5 коммитов: async wrappers, batch in filter_duplicates, batch in publish, batch similarity, tests + pytest-asyncio) |
-| 2025-10-15 | CR-C6 | 🔄 | Robust LLM - Part 1/5: Pydantic schemas созданы (models/llm_schemas.py). Осталось: chunking промптов, валидация размера, улучшенное логирование, тесты |
+| 2025-10-15 | CR-C6 | ✅ | Robust LLM завершён (5 частей): Pydantic schemas, chunking marketplace, chunking categories, валидация+логирование request_id, 11 comprehensive tests (74/74 total, 90% coverage) |
 | - | CR-H4 | ⏳ | Валидация конфигурации (Pydantic) - не начато |
 
 ### Спринт 3: Качество и масштабируемость
