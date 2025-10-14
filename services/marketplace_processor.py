@@ -10,6 +10,7 @@ from services.embeddings import EmbeddingService
 from services.gemini_client import GeminiClient
 from utils.config import Config
 from utils.logger import get_logger
+from utils.telegram_helpers import safe_connect
 from utils.timezone import now_msk
 
 logger = get_logger(__name__)
@@ -161,20 +162,36 @@ class MarketplaceProcessor:
             logger.info(f"Нет новых сообщений для {marketplace}")
             return
 
-        filtered_messages = self._filter_by_keywords(
+        # Словарь для отслеживания причин отклонения
+        all_rejected = {}
+
+        # ШАГ 2: Фильтрация по ключевым словам
+        filtered_messages, rejected_by_keywords = self._filter_by_keywords(
             base_messages, mp_config.keywords_lower, mp_config.combined_exclude_keywords_lower
         )
+        all_rejected.update(rejected_by_keywords)
         logger.info(f"После фильтрации по ключевым словам: {len(filtered_messages)} сообщений")
 
         if not filtered_messages:
+            # Помечаем все отфильтрованные как processed
+            for msg_id, reason in all_rejected.items():
+                self.db.mark_as_processed(msg_id, rejection_reason=reason)
             logger.info(f"Нет сообщений про {marketplace} после фильтрации")
             return
 
         # ШАГ 3: Проверка дубликатов
-        unique_messages = await self.filter_duplicates(filtered_messages)
+        unique_messages, rejected_duplicates = await self.filter_duplicates(filtered_messages)
+        all_rejected.update(rejected_duplicates)
         logger.info(f"После проверки дубликатов: {len(unique_messages)} уникальных")
 
         if not unique_messages:
+            # Помечаем все отфильтрованные как processed
+            for msg_id, reason in all_rejected.items():
+                self.db.mark_as_processed(
+                    msg_id,
+                    is_duplicate=(reason == "is_duplicate"),
+                    rejection_reason=reason
+                )
             logger.warning("Все сообщения являются дубликатами")
             return
 
@@ -225,13 +242,29 @@ class MarketplaceProcessor:
             display_name=mp_config.display_name or marketplace,
         )
 
+        # ШАГ 7: Помечаем все отфильтрованные сообщения как processed
+        # (которые не были помечены ранее)
+        for msg_id, reason in all_rejected.items():
+            self.db.mark_as_processed(
+                msg_id,
+                is_duplicate=(reason == "is_duplicate"),
+                rejection_reason=reason
+            )
+
         logger.info(f"✅ Обработка {marketplace} завершена!")
 
     def _filter_by_keywords(
         self, messages: list[dict], keywords_lower: list[str], exclude_keywords_lower: list[str]
-    ) -> list[dict]:
-        """Фильтрация сообщений по ключевым словам"""
+    ) -> tuple[list[dict], dict[int, str]]:
+        """
+        Фильтрация сообщений по ключевым словам
+
+        Returns:
+            Tuple of (filtered_messages, rejected_reasons)
+            where rejected_reasons maps message_id -> rejection_reason
+        """
         filtered = []
+        rejected = {}
 
         for msg in messages:
             text_lower = msg["text"].lower()
@@ -240,25 +273,28 @@ class MarketplaceProcessor:
             if exclude_keywords_lower and any(
                 exclude in text_lower for exclude in exclude_keywords_lower
             ):
-                self.db.mark_as_processed(
-                    msg["id"], rejection_reason="rejected_by_exclude_keywords"
-                )
+                rejected[msg["id"]] = "rejected_by_exclude_keywords"
                 continue
 
             # Проверяем включающие слова
             if keywords_lower and not any(keyword in text_lower for keyword in keywords_lower):
-                self.db.mark_as_processed(
-                    msg["id"], rejection_reason="rejected_by_keywords_mismatch"
-                )
+                rejected[msg["id"]] = "rejected_by_keywords_mismatch"
                 continue
 
             filtered.append(msg)
 
-        return filtered
+        return filtered, rejected
 
-    async def filter_duplicates(self, messages: list[dict]) -> list[dict]:
-        """Фильтрация дубликатов через embeddings"""
+    async def filter_duplicates(self, messages: list[dict]) -> tuple[list[dict], dict[int, str]]:
+        """
+        Фильтрация дубликатов через embeddings
+
+        Returns:
+            Tuple of (unique_messages, rejected_reasons)
+            where rejected_reasons maps message_id -> rejection_reason
+        """
         unique = []
+        rejected = {}
 
         for msg in messages:
             # Генерируем embedding
@@ -268,14 +304,12 @@ class MarketplaceProcessor:
             is_duplicate = self.db.check_duplicate(embedding, self.duplicate_threshold)
 
             if is_duplicate:
-                self.db.mark_as_processed(
-                    msg["id"], is_duplicate=True, rejection_reason="is_duplicate"
-                )
+                rejected[msg["id"]] = "is_duplicate"
                 continue
 
             unique.append(msg)
 
-        return unique
+        return unique, rejected
 
     async def moderate_posts(
         self, client: TelegramClient, posts: list[dict], marketplace: str
@@ -838,14 +872,14 @@ class MarketplaceProcessor:
                            Если False - использует старую систему (отдельно Ozon и WB)
         """
 
-        # Подключаемся к Telegram с отдельной сессией для processor
-        # Это предотвращает конфликты с listener который использует основную сессию
-        processor_session = self.config.get("telegram.session_name") + "_processor"
+        # Подключаемся к Telegram с использованием основной сессии
+        # Используем safe_connect для предотвращения FloodWait блокировок
+        session_name = self.config.get("telegram.session_name")
         client = TelegramClient(
-            processor_session, self.config.telegram_api_id, self.config.telegram_api_hash
+            session_name, self.config.telegram_api_id, self.config.telegram_api_hash
         )
 
-        await client.start(phone=self.config.telegram_phone)
+        await safe_connect(client, session_name)
 
         try:
             if use_categories:
