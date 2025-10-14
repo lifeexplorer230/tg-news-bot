@@ -53,7 +53,7 @@ def make_processor(messages, moderation_enabled=False):
     processor.config = SimpleNamespace(my_personal_account="tester")
     processor.db = FakeDB(messages)
     processor.global_exclude_keywords = ["spam"]
-    processor.marketplaces = {
+    processor.categories = {
         "ozon": Category(
             name="ozon",
             target_channel="@ozon",
@@ -69,7 +69,7 @@ def make_processor(messages, moderation_enabled=False):
             top_n=5,
         ),
     }
-    for marketplace in processor.marketplaces.values():
+    for marketplace in processor.categories.values():
         marketplace.combined_exclude_keywords_lower = ["spam"]
     processor.all_digest_enabled = True
     processor.all_digest_channel = "@all_digest"

@@ -656,7 +656,7 @@ class GeminiClient:
         """
         return [items[i : i + chunk_size] for i in range(0, len(items), chunk_size)]
 
-    def _process_marketplace_chunk(
+    def _process_category_chunk(
         self,
         messages: list[dict],
         marketplace: str,
@@ -789,7 +789,7 @@ class GeminiClient:
         if len(messages) <= chunk_size:
             # Малый список: обрабатываем за один запрос
             logger.info(f"Обработка {len(messages)} сообщений для {marketplace} (один запрос)")
-            return self._process_marketplace_chunk(messages, marketplace, top_n, display_name)
+            return self._process_category_chunk(messages, marketplace, top_n, display_name)
 
         # Большой список: разбиваем на чанки
         chunks = self._chunk_list(messages, chunk_size)
@@ -800,7 +800,7 @@ class GeminiClient:
         all_selected = []
         for i, chunk in enumerate(chunks, 1):
             logger.debug(f"Обработка чанка {i}/{len(chunks)} ({len(chunk)} сообщений)")
-            chunk_results = self._process_marketplace_chunk(chunk, marketplace, top_n, display_name)
+            chunk_results = self._process_category_chunk(chunk, marketplace, top_n, display_name)
             all_selected.extend(chunk_results)
 
         # Сортируем по score и берем top_n
