@@ -1,0 +1,114 @@
+# Профиль: универсальный новостной дайджест
+# Пример конфигурации для любого типа новостей (не только маркетплейсы)
+profile: generic
+
+paths:
+  profile: generic
+  data_dir: ./data
+  logs_dir: ./logs
+  sessions_dir: ./sessions
+
+telegram:
+  session_name: ./sessions/generic/session
+
+publication:
+  channel: '@your_news_channel'
+  footer_template: |
+    _____________________________________
+    Подпишись на канал: https://t.me/your_news_channel
+  header_template: "📰 Главные новости за {date}"
+
+listener:
+  mode: subscriptions
+  min_message_length: 50
+  channel_whitelist: []
+  channel_blacklist:
+    - spamads
+  manual_channels: []
+
+filters:
+  exclude_keywords:
+    - реклама
+    - курс
+    - промокод
+
+processor:
+  schedule_time: '09:00'
+  timezone: Europe/Moscow
+  duplicate_threshold: 0.85
+  top_n: 10
+  exclude_count: 5
+
+# U4: Универсальный ключ categories (заменяет marketplaces)
+# Можно использовать любые категории - не только маркетплейсы!
+categories:
+  - name: ai
+    display_name: Artificial Intelligence
+    enabled: true
+    top_n: 10
+    target_channel: '@your_news_channel'
+    keywords:
+      - ai
+      - artificial intelligence
+      - machine learning
+      - нейросеть
+    exclude_keywords:
+      - реклама
+      - курс
+  - name: crypto
+    display_name: Cryptocurrency
+    enabled: true
+    top_n: 10
+    target_channel: '@your_news_channel'
+    keywords:
+      - crypto
+      - bitcoin
+      - ethereum
+      - криптовалюта
+    exclude_keywords:
+      - реклама
+      - промокод
+  - name: tech
+    display_name: Technology
+    enabled: true
+    top_n: 10
+    target_channel: '@your_news_channel'
+    keywords:
+      - tech
+      - technology
+      - startup
+      - технологии
+    exclude_keywords:
+      - реклама
+
+channels:
+  all_digest:
+    enabled: true
+    target_channel: '@your_news_channel'
+    category_counts:
+      ai: 5
+      crypto: 3
+      tech: 2
+
+moderation:
+  enabled: true
+  timeout_hours: 2
+
+cleanup:
+  raw_messages_days: 14
+  published_days: 60
+  run_weekly: true
+
+status:
+  enabled: false
+  chat: Soft Status
+  bot_name: Generic News Bot
+  interval_minutes: 60
+  bot_token: ''
+  timezone: Europe/Moscow
+
+logging:
+  file: ./logs/generic/bot.log
+
+database:
+  path: ./data/generic_news.db

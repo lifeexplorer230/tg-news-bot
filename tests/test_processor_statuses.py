@@ -1,8 +1,8 @@
 import asyncio
 from types import SimpleNamespace
 
-from models.marketplace import Marketplace
-from services.marketplace_processor import MarketplaceProcessor
+from models.category import Category
+from services.news_processor import NewsProcessor
 
 
 class FakeDB:
@@ -49,19 +49,19 @@ class FakeClient:
 
 
 def make_processor(messages, moderation_enabled=False):
-    processor = MarketplaceProcessor.__new__(MarketplaceProcessor)
+    processor = NewsProcessor.__new__(NewsProcessor)
     processor.config = SimpleNamespace(my_personal_account="tester")
     processor.db = FakeDB(messages)
     processor.global_exclude_keywords = ["spam"]
-    processor.marketplaces = {
-        "ozon": Marketplace(
+    processor.categories = {
+        "ozon": Category(
             name="ozon",
             target_channel="@ozon",
             keywords=[],
             exclude_keywords=["spam"],
             top_n=5,
         ),
-        "wildberries": Marketplace(
+        "wildberries": Category(
             name="wildberries",
             target_channel="@wb",
             keywords=[],
@@ -69,7 +69,7 @@ def make_processor(messages, moderation_enabled=False):
             top_n=5,
         ),
     }
-    for marketplace in processor.marketplaces.values():
+    for marketplace in processor.categories.values():
         marketplace.combined_exclude_keywords_lower = ["spam"]
     processor.all_digest_enabled = True
     processor.all_digest_channel = "@all_digest"
@@ -142,7 +142,19 @@ def test_process_all_categories_marks_all_outcomes():
             "general": [],
         }
 
-    processor._gemini_client = SimpleNamespace(select_three_categories=fake_select_three_categories)
+    def fake_select_by_categories(_messages, category_counts, chunk_size=50):
+        # Wrapper для backwards compatibility с select_three_categories
+        return fake_select_three_categories(
+            _messages,
+            wb_count=category_counts.get("wildberries", 5),
+            ozon_count=category_counts.get("ozon", 5),
+            general_count=category_counts.get("general", 5),
+        )
+
+    processor._gemini_client = SimpleNamespace(
+        select_three_categories=fake_select_three_categories,
+        select_by_categories=fake_select_by_categories,
+    )
 
     asyncio.run(processor.process_all_categories(FakeClient()))
 
@@ -187,7 +199,19 @@ def test_process_all_categories_marks_moderator_rejections():
             "general": [],
         }
 
-    processor._gemini_client = SimpleNamespace(select_three_categories=fake_select_three_categories)
+    def fake_select_by_categories(_messages, category_counts, chunk_size=50):
+        # Wrapper для backwards compatibility с select_three_categories
+        return fake_select_three_categories(
+            _messages,
+            wb_count=category_counts.get("wildberries", 5),
+            ozon_count=category_counts.get("ozon", 5),
+            general_count=category_counts.get("general", 5),
+        )
+
+    processor._gemini_client = SimpleNamespace(
+        select_three_categories=fake_select_three_categories,
+        select_by_categories=fake_select_by_categories,
+    )
 
     async def fake_moderate_categories(client, categories):
         return []

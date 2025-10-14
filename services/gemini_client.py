@@ -12,7 +12,13 @@ from typing import Callable, Optional
 import google.generativeai as genai
 from google.api_core import exceptions as google_exceptions
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import (
+    before_sleep_log,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from utils.logger import setup_logger
 
@@ -650,7 +656,7 @@ class GeminiClient:
         """
         return [items[i : i + chunk_size] for i in range(0, len(items), chunk_size)]
 
-    def _process_marketplace_chunk(
+    def _process_category_chunk(
         self,
         messages: list[dict],
         marketplace: str,
@@ -783,7 +789,7 @@ class GeminiClient:
         if len(messages) <= chunk_size:
             # Малый список: обрабатываем за один запрос
             logger.info(f"Обработка {len(messages)} сообщений для {marketplace} (один запрос)")
-            return self._process_marketplace_chunk(messages, marketplace, top_n, display_name)
+            return self._process_category_chunk(messages, marketplace, top_n, display_name)
 
         # Большой список: разбиваем на чанки
         chunks = self._chunk_list(messages, chunk_size)
@@ -794,7 +800,7 @@ class GeminiClient:
         all_selected = []
         for i, chunk in enumerate(chunks, 1):
             logger.debug(f"Обработка чанка {i}/{len(chunks)} ({len(chunk)} сообщений)")
-            chunk_results = self._process_marketplace_chunk(chunk, marketplace, top_n, display_name)
+            chunk_results = self._process_category_chunk(chunk, marketplace, top_n, display_name)
             all_selected.extend(chunk_results)
 
         # Сортируем по score и берем top_n
@@ -919,6 +925,64 @@ class GeminiClient:
         retry=retry_if_exception_type((Exception,)),
         reraise=True,
     )
+    def select_by_categories(
+        self,
+        messages: list[dict],
+        category_counts: dict[str, int],
+        chunk_size: int = 50,
+    ) -> dict[str, list[dict]]:
+        """
+        Универсальный отбор новостей по категориям (U1 - универсализация)
+
+        Поддерживает любые категории из конфига, не только marketplace-специфичные.
+        С поддержкой chunking (CR-C6): если messages > chunk_size, разбиваем на чанки.
+
+        Args:
+            messages: Список всех сообщений
+            category_counts: Словарь {категория: количество}, например:
+                {"wildberries": 5, "ozon": 5, "general": 5}
+                {"ai": 10, "tech": 10, "crypto": 5}
+            chunk_size: Максимальный размер чанка (по умолчанию 50)
+
+        Returns:
+            Dict с ключами из category_counts, каждый содержит список новостей
+        """
+        if not messages:
+            # Возвращаем пустой dict для всех категорий
+            return {cat: [] for cat in category_counts.keys()}
+
+        # Используем старый метод для обратной совместимости
+        # (для marketplace use case с 3 категориями)
+        # TODO: В будущем создать полностью универсальный промпт
+        if set(category_counts.keys()) == {"wildberries", "ozon", "general"}:
+            return self.select_three_categories(
+                messages,
+                wb_count=category_counts.get("wildberries", 5),
+                ozon_count=category_counts.get("ozon", 5),
+                general_count=category_counts.get("general", 5),
+                chunk_size=chunk_size,
+            )
+
+        # Для других категорий - возвращаем всё в первую категорию
+        # (временное решение до создания универсального промпта)
+        logger.warning(
+            f"select_by_categories: Категории {list(category_counts.keys())} не поддерживаются "
+            f"универсальным промптом. Используйте 'wildberries', 'ozon', 'general' "
+            f"или создайте custom промпт."
+        )
+        first_category = list(category_counts.keys())[0]
+        return {cat: ([] if cat != first_category else messages[:category_counts[cat]])
+                for cat in category_counts.keys()}
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        before_sleep=lambda retry_state: logger.warning(
+            f"Retry {retry_state.attempt_number}/3 для select_three_categories "
+            f"после ошибки: {retry_state.outcome.exception()}"
+        ),
+        reraise=True,
+    )
     def select_three_categories(
         self,
         messages: list[dict],
@@ -929,6 +993,9 @@ class GeminiClient:
     ) -> dict[str, list[dict]]:
         """
         Отбор новостей по 3 категориям: Wildberries, Ozon, Общие
+
+        DEPRECATED: Используйте select_by_categories() для универсальности.
+        Этот метод сохранен для backwards compatibility.
 
         С поддержкой chunking (CR-C6): если messages > chunk_size, разбиваем на чанки.
 
