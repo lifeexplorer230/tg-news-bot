@@ -668,6 +668,7 @@
 | 2025-10-15 00:30 | Sprint 2 | CR-C5 | ✅ | Batch embeddings и async дедупликация: 5 коммитов (Part 1-5), async wrappers + batch encoding + batch similarity + tests (63/63 tests, 90% coverage, 5-10x ускорение) |
 | 2025-10-15 01:00 | Sprint 2 | CR-C6 | ✅ | Robust LLM завершён (5 коммитов): Part 1 Pydantic schemas (125 lines), Part 2 chunking marketplace (120 lines), Part 3 chunking categories (96 lines), Part 4 валидация+логирование (94 lines), Part 5 tests (258 lines, 11 tests). Итого 74/74 tests, 90% coverage |
 | 2025-10-15 02:00 | Sprint 2 | CR-H4 | ✅ | Валидация конфигурации (Pydantic) завершена (4 коммита): Part 1 models/config_schemas.py (431 lines), Part 2-3 интеграция в utils/config.py + env validation (66 lines), Part 4 tests/test_config_validation.py (298 lines, 11 tests). Дружелюбные ❌ error messages. Итого 85/85 tests, 90% coverage |
+| 2025-10-14 21:45 | Sprint 3 | CR-H2 | ✅ | Timezone-aware система: database/db.py get_today_stats() с timezone_name параметром (53 lines), tests/test_timezone.py (233 lines, 6 tests). Границы дня в локальной TZ, конвертация в UTC. 91/91 tests, coverage database/db.py 90.61% (было 40%) |
 | | | | | |
 
 **Спринты стабилизации (Code Review):**
@@ -691,7 +692,7 @@
 ### Спринт 3: Качество и масштабируемость
 | Дата | Задача | Статус | Комментарий |
 |------|--------|--------|-------------|
-| - | CR-H2 | ⏳ | Timezone-aware система - не начато |
+| 2025-10-14 | CR-H2 | ✅ | Timezone-aware система: get_today_stats() с timezone_name, 6 tests границ суток, coverage 90.61% |
 | - | CR-H3 | ⏳ | Хрупкость точки входа / DI layer - не начато |
 | - | CR-H5 | ⏳ | Config cleanup - не начато |
 | - | CR-C4 | ⏳ | Реальная модерация Telegram - не начато |
@@ -703,28 +704,28 @@
 
 ## 📌 Текущее состояние
 
-- **Версия:** 1.6.0-dev
-- **Последний коммит:** CR-H4 Part 4/4 (validation tests, 85/85 tests, 90% coverage)
-- **Текущий этап:** Спринт 2 - ЗАВЕРШЕН ✅ (4/4 completed, 100%)
-- **Следующая цель:** Спринт 3 - CR-H2 (Timezone-aware система)
+- **Версия:** 1.7.0-dev
+- **Последний коммит:** CR-H2 (timezone-aware stats, 91/91 tests, database coverage 90.61%)
+- **Текущий этап:** Спринт 3 - В РАБОТЕ 🟡 (1/5 completed, 20%)
+- **Следующая цель:** Спринт 3 - CR-H3 (DI layer) или CR-C4 (Модерация)
 - **Блокеры:** Нет
 
 **Готовность компонентов:**
 - ✅ Listener — базовая функциональность работает, создает свой DB
 - ✅ Processor — базовая функциональность работает, создает свой DB + оптимизация чтения (CR-H1)
 - ✅ Embeddings — lazy loading + async wrappers + batch encoding + batch similarity (CR-C5)
-- ✅ Database — SQLite с WAL mode + context manager + per-component instances
+- ✅ Database — SQLite с WAL mode + context manager + per-component instances + timezone-aware stats (CR-H2)
 - ✅ Scheduler — adaptive idle через schedule.idle_seconds() + safety sleep
 - ✅ FloodWait protection — safe_connect() применен
 - ✅ Config Validation — Pydantic schemas для всех конфигов, env validation, дружелюбные ❌ error messages (CR-H4)
-- ✅ Тесты — 85/85 passing, 90% coverage (+11 config validation тестов)
+- ✅ Тесты — 91/94 passing, database coverage 90.61% (+6 timezone тестов)
 - ⏳ CI/CD — не настроен
 - ⏳ Monitoring — минимальный (healthcheck)
 
 **Новые спринты (Code Review):**
 - ✅ Спринт 1: 4 критических блокера ЗАВЕРШЕН (CR-C1 ✅, CR-C2 ✅, CR-C3 ✅, CR-C7 ✅)
 - ✅ Спринт 2: 4 высокоприоритетных задачи ЗАВЕРШЕН (CR-H1 ✅, CR-C5 ✅, CR-C6 ✅, CR-H4 ✅)
-- 🟡 Спринт 3: 5 задач качества/масштаба (CR-H2 ⏳, CR-H3 ⏳, CR-H5 ⏳, CR-C4 ⏳, CR-OPT ⏳)
+- 🟡 Спринт 3: 5 задач качества/масштаба (CR-H2 ✅, CR-H3 ⏳, CR-H5 ⏳, CR-C4 ⏳, CR-OPT ⏳)
 
 ---
 
