@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import yaml
 from dotenv import load_dotenv
@@ -73,7 +73,9 @@ class Config:
             base_data = _read_yaml(self._base_path)
             profile_name = profile or os.getenv("PROFILE") or base_data.get("profile")
             if not profile_name:
-                raise ValueError("Не задан профиль конфигурации (profile) и отсутствует переменная PROFILE")
+                raise ValueError(
+                    "Не задан профиль конфигурации (profile) и отсутствует переменная PROFILE"
+                )
             profile_path = self._profiles_dir / f"{profile_name}.yaml"
             profile_data = _read_yaml(profile_path)
             merged = _deep_merge(base_data, profile_data)
@@ -142,7 +144,9 @@ class Config:
                 field_name = error["loc"][0] if error["loc"] else "unknown"
                 msg = error["msg"]
                 error_lines.append(f"  • {field_name}: {msg}")
-            error_lines.append("\nПроверьте файл .env и убедитесь что все переменные заполнены корректно.")
+            error_lines.append(
+                "\nПроверьте файл .env и убедитесь что все переменные заполнены корректно."
+            )
             raise ValueError("\n".join(error_lines)) from e
 
     def _apply_paths(self) -> None:
@@ -164,11 +168,13 @@ class Config:
         logs_dir = _format_string(logs_dir, context)
         sessions_dir = _format_string(sessions_dir, context)
 
-        context.update({
-            "data_dir": data_dir,
-            "logs_dir": logs_dir,
-            "sessions_dir": sessions_dir,
-        })
+        context.update(
+            {
+                "data_dir": data_dir,
+                "logs_dir": logs_dir,
+                "sessions_dir": sessions_dir,
+            }
+        )
 
         paths["data_dir"] = data_dir
         paths["logs_dir"] = logs_dir
