@@ -12,6 +12,7 @@ class DummyConfig:
         self.telegram_api_id = 123
         self.telegram_api_hash = "hash"
         self.telegram_phone = "+100000000"
+        self.db_path = ":memory:"
 
     def get(self, path: str, default=None):
         parts = path.split(".")
@@ -23,19 +24,8 @@ class DummyConfig:
                 return default
         return value
 
-
-class DummyDB:
-    def __init__(self):
-        self.added = []
-
-    def add_channel(self, username, title):
-        self.added.append((username, title))
-
-    def get_channel_id(self, username):
-        return None
-
-    def close(self):
-        pass
+    def database_settings(self):
+        return {"timeout": 30}
 
 
 class FakeTelethonChannel:
@@ -87,7 +77,7 @@ def test_manual_mode_loads_channels(monkeypatch):
         },
     }
 
-    listener = TelegramListener(DummyConfig(config_data), DummyDB())
+    listener = TelegramListener(DummyConfig(config_data))
     asyncio.run(listener.load_channels())
 
     assert listener.mode == "manual"
@@ -110,7 +100,7 @@ def test_unknown_mode_falls_back_to_subscriptions(monkeypatch):
         },
     }
 
-    listener = TelegramListener(DummyConfig(config_data), DummyDB())
+    listener = TelegramListener(DummyConfig(config_data))
     assert listener.mode == "subscriptions"
 
 
@@ -130,7 +120,7 @@ def test_is_channel_allowed_with_whitelist_blacklist(monkeypatch):
         },
     }
 
-    listener = TelegramListener(DummyConfig(config_data), DummyDB())
+    listener = TelegramListener(DummyConfig(config_data))
 
     assert listener._is_channel_allowed("allowed", 100)
     assert listener._is_channel_allowed("ALLOWED2", 101)
