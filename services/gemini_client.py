@@ -740,20 +740,18 @@ class GeminiClient:
 
         return final_results
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((Exception,)),
-        reraise=True,
-    )
-    def select_three_categories(
-        self, messages: list[dict], wb_count: int = 5, ozon_count: int = 5, general_count: int = 5
+    def _process_categories_chunk(
+        self,
+        messages: list[dict],
+        wb_count: int,
+        ozon_count: int,
+        general_count: int,
     ) -> dict[str, list[dict]]:
         """
-        Отбор новостей по 3 категориям: Wildberries, Ozon, Общие
+        Обработать один чанк сообщений для 3-категорийной системы (CR-C6 helper)
 
         Args:
-            messages: Список всех сообщений
+            messages: Чанк сообщений
             wb_count: Количество новостей про Wildberries
             ozon_count: Количество новостей про Ozon
             general_count: Количество общих новостей
@@ -761,9 +759,6 @@ class GeminiClient:
         Returns:
             Dict с ключами 'wildberries', 'ozon', 'general'
         """
-        if not messages:
-            return {"wildberries": [], "ozon": [], "general": []}
-
         messages_block = self._build_messages_block(messages)
 
         prompt = self._render_prompt(
@@ -783,7 +778,7 @@ class GeminiClient:
             duration = time.time() - start_time
 
             # Детальное логирование
-            self._log_api_call("select_three_categories", prompt, result_text, duration)
+            self._log_api_call("select_three_categories[chunk]", prompt, result_text, duration)
 
             # Удаляем markdown разметку
             if result_text.startswith("```"):
@@ -806,7 +801,7 @@ class GeminiClient:
                 validated_categories = CategoryNews(**categories)
                 categories = validated_categories.model_dump()
             except ValidationError as e:
-                logger.error(f"Ошибка валидации JSON от Gemini (3 категории): {e}")
+                logger.error(f"Ошибка валидации JSON от Gemini (3 категории, chunk): {e}")
                 return {"wildberries": [], "ozon": [], "general": []}
 
             # Добавляем дополнительные поля к каждой новости
@@ -832,14 +827,95 @@ class GeminiClient:
             ozon_len = len(categories.get("ozon", []))
             gen_len = len(categories.get("general", []))
 
-            logger.info(f"Gemini отобрал новости: WB={wb_len}, Ozon={ozon_len}, Общие={gen_len}")
-
+            logger.debug(
+                f"Chunk: отобрано WB={wb_len}, Ozon={ozon_len}, Общие={gen_len} из {len(messages)} сообщений"
+            )
             return categories
 
         except json.JSONDecodeError as e:
-            logger.error(f"Ошибка парсинга JSON от Gemini (3 категории): {e}")
-            logger.error(f"Текст ответа: {result_text}")
+            logger.error(f"Ошибка парсинга JSON от Gemini (3 категории, chunk): {e}")
             return {"wildberries": [], "ozon": [], "general": []}
         except Exception as e:
-            logger.error(f"Ошибка при отборе новостей (3 категории): {e}")
+            logger.error(f"Ошибка при отборе новостей (3 категории, chunk): {e}")
             return {"wildberries": [], "ozon": [], "general": []}
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((Exception,)),
+        reraise=True,
+    )
+    def select_three_categories(
+        self,
+        messages: list[dict],
+        wb_count: int = 5,
+        ozon_count: int = 5,
+        general_count: int = 5,
+        chunk_size: int = 50,
+    ) -> dict[str, list[dict]]:
+        """
+        Отбор новостей по 3 категориям: Wildberries, Ozon, Общие
+
+        С поддержкой chunking (CR-C6): если messages > chunk_size, разбиваем на чанки.
+
+        Args:
+            messages: Список всех сообщений
+            wb_count: Количество новостей про Wildberries
+            ozon_count: Количество новостей про Ozon
+            general_count: Количество общих новостей
+            chunk_size: Максимальный размер чанка (по умолчанию 50)
+
+        Returns:
+            Dict с ключами 'wildberries', 'ozon', 'general'
+        """
+        if not messages:
+            return {"wildberries": [], "ozon": [], "general": []}
+
+        # CR-C6: Chunking для больших списков сообщений
+        if len(messages) <= chunk_size:
+            # Малый список: обрабатываем за один запрос
+            logger.info(
+                f"Обработка {len(messages)} сообщений для 3 категорий (один запрос)"
+            )
+            return self._process_categories_chunk(messages, wb_count, ozon_count, general_count)
+
+        # Большой список: разбиваем на чанки
+        chunks = self._chunk_list(messages, chunk_size)
+        logger.info(
+            f"CR-C6: Разбиваем {len(messages)} сообщений на {len(chunks)} чанков по {chunk_size} для 3 категорий"
+        )
+
+        # Собираем результаты из всех чанков
+        all_categories = {"wildberries": [], "ozon": [], "general": []}
+
+        for i, chunk in enumerate(chunks, 1):
+            logger.debug(f"Обработка чанка {i}/{len(chunks)} ({len(chunk)} сообщений)")
+            chunk_results = self._process_categories_chunk(
+                chunk, wb_count, ozon_count, general_count
+            )
+
+            # Объединяем результаты по категориям
+            for category_name in ["wildberries", "ozon", "general"]:
+                all_categories[category_name].extend(chunk_results.get(category_name, []))
+
+        # Сортируем каждую категорию по score и берём нужное количество
+        all_categories["wildberries"].sort(key=lambda x: x.get("score", 0), reverse=True)
+        all_categories["ozon"].sort(key=lambda x: x.get("score", 0), reverse=True)
+        all_categories["general"].sort(key=lambda x: x.get("score", 0), reverse=True)
+
+        final_categories = {
+            "wildberries": all_categories["wildberries"][:wb_count],
+            "ozon": all_categories["ozon"][:ozon_count],
+            "general": all_categories["general"][:general_count],
+        }
+
+        wb_len = len(final_categories["wildberries"])
+        ozon_len = len(final_categories["ozon"])
+        gen_len = len(final_categories["general"])
+
+        logger.info(
+            f"CR-C6: Gemini отобрал топовые новости: WB={wb_len}, Ozon={ozon_len}, Общие={gen_len} "
+            f"из {len(messages)} сообщений ({len(chunks)} чанков)"
+        )
+
+        return final_categories
