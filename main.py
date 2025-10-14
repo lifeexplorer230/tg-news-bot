@@ -18,7 +18,7 @@ import time
 import schedule
 
 from core.container import get_container, set_container, ServiceContainer
-from services.marketplace_processor import MarketplaceProcessor
+from services.news_processor import NewsProcessor
 from services.status_reporter import run_status_reporter
 from services.telegram_listener import TelegramListener
 from utils.config import Config, load_config
@@ -135,10 +135,10 @@ async def run_processor_mode(config: Config | None = None):
         logger.setLevel(getattr(logging, config.log_level.upper(), logging.INFO))
 
     logger.info("=" * 80)
-    logger.info("⚙️  ЗАПУСК PROCESSOR - Marketplace News Bot")
+    logger.info("⚙️  ЗАПУСК PROCESSOR - News Bot")
     logger.info("=" * 80)
 
-    processor = MarketplaceProcessor(config)
+    processor = NewsProcessor(config)
     await processor.run()
 
 

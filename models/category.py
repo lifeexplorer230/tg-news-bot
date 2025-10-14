@@ -2,8 +2,8 @@ from dataclasses import dataclass, field
 
 
 @dataclass
-class Marketplace:
-    """Настройки конкретного маркетплейса для процессора."""
+class Category:
+    """Настройки категории новостей для процессора (универсальная система)."""
 
     name: str
     target_channel: str

@@ -1,4 +1,4 @@
-"""Обработчик новостей маркетплейсов с поддержкой Ozon и Wildberries"""
+"""Универсальный процессор новостей с поддержкой категорий"""
 
 import asyncio
 from datetime import timedelta
@@ -7,7 +7,7 @@ import numpy as np
 from telethon import TelegramClient
 
 from database.db import Database
-from models.marketplace import Marketplace
+from models.category import Category
 from services.embeddings import EmbeddingService
 from services.gemini_client import GeminiClient
 from utils.config import Config
@@ -18,8 +18,8 @@ from utils.timezone import now_msk
 logger = get_logger(__name__)
 
 
-class MarketplaceProcessor:
-    """Процессор новостей для маркетплейсов (Ozon и Wildberries)"""
+class NewsProcessor:
+    """Универсальный процессор новостей с поддержкой категорий"""
 
     def __init__(self, config: Config):
         self.config = config
@@ -43,7 +43,8 @@ class MarketplaceProcessor:
             keyword.lower() for keyword in config.get("filters.exclude_keywords", []) if keyword
         ]
 
-        raw_marketplaces = config.get("marketplaces", [])
+        # U4: Backwards compatibility - поддержка обоих ключей (categories и marketplaces)
+        raw_marketplaces = config.get("categories") or config.get("marketplaces", [])
         if isinstance(raw_marketplaces, dict):
             raw_marketplaces = [
                 {
@@ -53,33 +54,33 @@ class MarketplaceProcessor:
                 for name in raw_marketplaces
             ]
 
-        self.marketplaces: dict[str, Marketplace] = {}
+        self.categories: dict[str, Category] = {}
         for mp_cfg in raw_marketplaces:
             if not isinstance(mp_cfg, dict):
                 continue
             data = dict(mp_cfg)
             data.setdefault("enabled", True)
             try:
-                marketplace = Marketplace(**data)
+                category = Category(**data)
             except TypeError as exc:
-                logger.error(f"Некорректная конфигурация маркетплейса {mp_cfg}: {exc}")
+                logger.error(f"Некорректная конфигурация категории {mp_cfg}: {exc}")
                 continue
-            marketplace.combined_exclude_keywords_lower = list(
-                dict.fromkeys(marketplace.exclude_keywords_lower + self.global_exclude_keywords)
+            category.combined_exclude_keywords_lower = list(
+                dict.fromkeys(category.exclude_keywords_lower + self.global_exclude_keywords)
             )
-            self.marketplaces[marketplace.name] = marketplace
+            self.categories[category.name] = category
 
-        if not self.marketplaces:
-            logger.warning("В конфигурации не найдено ни одного маркетплейса")
+        if not self.categories:
+            logger.warning("В конфигурации не найдено ни одной категории")
 
         self.all_exclude_keywords_lower = set(self.global_exclude_keywords)
-        for marketplace in self.marketplaces.values():
-            self.all_exclude_keywords_lower.update(marketplace.combined_exclude_keywords_lower)
+        for category in self.categories.values():
+            self.all_exclude_keywords_lower.update(category.combined_exclude_keywords_lower)
 
-        self.marketplace_names = list(self.marketplaces.keys())
+        self.category_names = list(self.categories.keys())
 
         default_channel = next(
-            (mp.target_channel for mp in self.marketplaces.values() if mp.target_channel),
+            (mp.target_channel for mp in self.categories.values() if mp.target_channel),
             None,
         )
 
@@ -89,15 +90,13 @@ class MarketplaceProcessor:
             default_channel,
         )
         counts_config = config.get("channels.all_digest.category_counts", {})
-        self.all_digest_counts = {
-            "wildberries": counts_config.get("wildberries", 5),
-            "ozon": counts_config.get("ozon", 5),
-            "general": counts_config.get("general", 5),
-        }
+        # Динамически читаем категории из конфига (универсальная система)
+        # Поддерживает любые категории, не только marketplace-специфичные
+        self.all_digest_counts = dict(counts_config) if counts_config else {}
 
         self.publication_header_template = config.get(
             "publication.header_template",
-            "📌 Главные новости маркетплейсов за {date}",
+            "📰 Главные новости за {date}",
         )
         self.publication_footer_template = config.get("publication.footer_template", "")
         self.publication_preview_channel = config.get("publication.preview_channel")
@@ -142,33 +141,33 @@ class MarketplaceProcessor:
             )
         return self._gemini_client
 
-    async def process_marketplace(
+    async def process_category(
         self, marketplace: str, client: TelegramClient, base_messages: list[dict] | None = None
     ):
         """
-        Обработка новостей для конкретного маркетплейса
+        Обработка новостей для конкретной категории
 
         Args:
-            marketplace: Название маркетплейса
+            marketplace: Название категории (параметр сохранён для backwards compatibility)
             client: Telegram client
             base_messages: Кэшированные сообщения (оптимизация CR-H1). Если None - загружаются из БД
         """
 
-        if marketplace not in self.marketplaces:
-            logger.error(f"Неизвестный маркетплейс: {marketplace}")
+        if marketplace not in self.categories:
+            logger.error(f"Неизвестная категория: {marketplace}")
             return
 
-        mp_config = self.marketplaces.get(marketplace)
+        mp_config = self.categories.get(marketplace)
         if mp_config is None:
-            logger.error(f"Маркетплейс {marketplace} отсутствует в конфигурации")
+            logger.error(f"Категория {marketplace} отсутствует в конфигурации")
             return
 
         if not mp_config.enabled:
-            logger.info(f"Маркетплейс {marketplace} отключен в конфиге")
+            logger.info(f"Категория {marketplace} отключена в конфиге")
             return
 
         logger.info("=" * 80)
-        logger.info(f"🛒 ОБРАБОТКА НОВОСТЕЙ: {marketplace.upper()}")
+        logger.info(f"📰 ОБРАБОТКА КАТЕГОРИИ: {marketplace.upper()}")
         logger.info("=" * 80)
 
         # ШАГ 1: Загружаем сообщения (из кэша или БД)
@@ -470,23 +469,20 @@ class MarketplaceProcessor:
             logger.warning("Все сообщения являются дубликатами")
             return
 
-        # ШАГ 4: Отбор по 3 категориям через Gemini (5+5+5=15 новостей)
-        categories = self.gemini.select_three_categories(
+        # ШАГ 4: Отбор по категориям через Gemini (динамическая система)
+        # Поддерживает любые категории из конфига, не только marketplace-специфичные
+        categories = self.gemini.select_by_categories(
             unique_messages,
-            wb_count=self.all_digest_counts["wildberries"],
-            ozon_count=self.all_digest_counts["ozon"],
-            general_count=self.all_digest_counts["general"],
+            category_counts=self.all_digest_counts,
         )
 
-        # Подсчитываем сколько получилось
-        wb_count = len(categories.get("wildberries", []))
-        ozon_count = len(categories.get("ozon", []))
-        general_count = len(categories.get("general", []))
-        total_count = wb_count + ozon_count + general_count
+        # Подсчитываем сколько получилось (динамически для всех категорий)
+        category_stats = {cat: len(posts) for cat, posts in categories.items()}
+        total_count = sum(category_stats.values())
 
-        logger.info(
-            f"Gemini отобрал: WB={wb_count}, Ozon={ozon_count}, Общие={general_count}, Всего={total_count}"
-        )
+        # Формируем красивый лог с категориями
+        stats_str = ", ".join(f"{cat}={count}" for cat, count in category_stats.items())
+        logger.info(f"Gemini отобрал: {stats_str}, Всего={total_count}")
 
         selected_ids = {
             post["source_message_id"]
@@ -511,12 +507,8 @@ class MarketplaceProcessor:
                     self.db.mark_as_processed(msg_id, rejection_reason="rejected_by_moderator")
                 return
         else:
-            # Без модерации - берем все что есть
-            approved_posts = (
-                categories.get("wildberries", [])
-                + categories.get("ozon", [])
-                + categories.get("general", [])
-            )
+            # Без модерации - берем все что есть (динамически для всех категорий)
+            approved_posts = [post for posts in categories.values() for post in posts]
 
         approved_ids = {
             post.get("source_message_id")
@@ -544,16 +536,16 @@ class MarketplaceProcessor:
             self.all_digest_channel
             if self.all_digest_enabled and self.all_digest_channel
             else next(
-                (mp.target_channel for mp in self.marketplaces.values() if mp.target_channel),
+                (mp.target_channel for mp in self.categories.values() if mp.target_channel),
                 None,
             )
         )
         await self.publish_digest(
             client,
             approved_posts,
-            "маркетплейсы",
+            "категории",
             target_channel,
-            display_name="Маркетплейсы",
+            display_name="Категории",
         )
 
         # ШАГ 7: Помечаем все отфильтрованные сообщения как processed
@@ -799,30 +791,16 @@ class MarketplaceProcessor:
 
         idx = 1
 
-        # Категория Wildberries
-        if categories.get("wildberries"):
-            lines.append("📦 **WILDBERRIES**\n")
-            for post in categories["wildberries"]:
-                emoji = number_emojis.get(idx, f"{idx}.")
-                lines.append(f"{emoji} **{post['title']}**")
-                lines.append(f"_{post['description'][:100]}..._")
-                lines.append(f"⭐ {post.get('score', 0)}/10\n")
-                idx += 1
+        # Динамически форматируем все категории (универсальная система)
+        for category_name, posts in categories.items():
+            if not posts:
+                continue
 
-        # Категория Ozon
-        if categories.get("ozon"):
-            lines.append("📦 **OZON**\n")
-            for post in categories["ozon"]:
-                emoji = number_emojis.get(idx, f"{idx}.")
-                lines.append(f"{emoji} **{post['title']}**")
-                lines.append(f"_{post['description'][:100]}..._")
-                lines.append(f"⭐ {post.get('score', 0)}/10\n")
-                idx += 1
+            # Форматируем имя категории красиво
+            display_name = category_name.upper().replace("_", " ")
+            lines.append(f"📦 **{display_name}**\n")
 
-        # Категория Общие
-        if categories.get("general"):
-            lines.append("📦 **ОБЩИЕ**\n")
-            for post in categories["general"]:
+            for post in posts:
                 emoji = number_emojis.get(idx, f"{idx}.")
                 lines.append(f"{emoji} **{post['title']}**")
                 lines.append(f"_{post['description'][:100]}..._")
@@ -988,11 +966,11 @@ class MarketplaceProcessor:
         logger.info(f"💾 Сохранено {len(posts)} embeddings в БД")
 
     async def run(self, use_categories=True):
-        """Запуск обработки для всех маркетплейсов
+        """Запуск обработки для всех категорий
 
         Args:
             use_categories: Если True - использует новую 3-категорийную систему (5+5+5=15, выбор 10)
-                           Если False - использует старую систему (отдельно Ozon и WB)
+                           Если False - использует старую систему (обработка каждой категории отдельно)
         """
 
         # Подключаемся к Telegram с использованием основной сессии
@@ -1009,20 +987,20 @@ class MarketplaceProcessor:
                 # НОВАЯ СИСТЕМА: 3 категории (WB + Ozon + Общие)
                 await self.process_all_categories(client)
             else:
-                # СТАРАЯ СИСТЕМА: Обрабатываем каждый маркетплейс отдельно
+                # СТАРАЯ СИСТЕМА: Обрабатываем каждую категорию отдельно
 
-                # CR-H1: Загружаем сообщения ОДИН раз для всех маркетплейсов
+                # CR-H1: Загружаем сообщения ОДИН раз для всех категорий
                 base_messages = self.db.get_unprocessed_messages(hours=24)
                 logger.info(
-                    f"📦 CR-H1: Загружено {len(base_messages)} сообщений (будут переиспользованы для {len(self.marketplace_names)} маркетплейсов)"
+                    f"📦 CR-H1: Загружено {len(base_messages)} сообщений (будут переиспользованы для {len(self.category_names)} категорий)"
                 )
 
-                for marketplace in self.marketplace_names:
+                for category_name in self.category_names:
                     try:
                         # Передаем кэшированные base_messages вместо повторного чтения из БД
-                        await self.process_marketplace(marketplace, client, base_messages=base_messages)
+                        await self.process_category(category_name, client, base_messages=base_messages)
                     except Exception as e:
-                        logger.error(f"Ошибка обработки {marketplace}: {e}", exc_info=True)
+                        logger.error(f"Ошибка обработки {category_name}: {e}", exc_info=True)
         finally:
             await client.disconnect()
             self.db.close()
