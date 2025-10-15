@@ -349,20 +349,4 @@ class TelegramListener:
             logger.warning("Не удалось обновить heartbeat: %s", exc)
 
 
-async def run_listener(config: Config, db: Database):
-    """
-    Запустить listener
-
-    Args:
-        config: Конфигурация
-        db: База данных
-    """
-    listener = TelegramListener(config, db)
-    try:
-        await listener.start()
-    except KeyboardInterrupt:
-        logger.info("Получен сигнал остановки")
-        await listener.stop()
-    except Exception as e:
-        logger.error(f"Ошибка в listener: {e}")
-        await listener.stop()
+# QA-7: Функция run_listener удалена как мёртвый код (не используется, битая сигнатура)

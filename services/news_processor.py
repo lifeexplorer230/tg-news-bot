@@ -29,7 +29,7 @@ class NewsProcessor:
 
         # Кэш для оптимизации (CR-H1)
         self._cached_published_embeddings: list[tuple[int, any]] | None = None
-        self._cached_base_messages: list[dict] | None = None
+        # QA-7: _cached_base_messages удалён как мёртвый код (не используется)
 
         self._embedding_model_name = config.get(
             "embeddings.model", "paraphrase-multilingual-MiniLM-L12-v2"
