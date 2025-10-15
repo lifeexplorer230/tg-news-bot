@@ -274,7 +274,7 @@ class AppConfig(BaseModel):
     Валидирует весь config.yaml с дружелюбными error messages.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="allow")  # Разрешаем профиль-специфичные поля
 
     profile: str = Field(default="marketplace", description="Профиль конфигурации")
     paths: PathsConfig = Field(default_factory=PathsConfig, description="Пути")

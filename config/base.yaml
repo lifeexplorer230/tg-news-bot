@@ -79,7 +79,7 @@ moderation:
     - отмена
     - cancel
   publish_all_keywords:      # Ключевые слова для публикации всех новостей
-    - 0
+    - "0"
     - все
     - all
   message:
