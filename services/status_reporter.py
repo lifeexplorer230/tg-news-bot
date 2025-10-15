@@ -92,12 +92,15 @@ class StatusReporter:
                 )
                 await safe_connect(client, session_name)
 
-            # Отправляем сообщение
-            await client.send_message(self.status_chat, message)
-
-            logger.info(f"✅ Статус отправлен в {self.status_chat}")
-
-            await client.disconnect()
+            # QA-6: Гарантируем disconnect даже при исключении
+            try:
+                # Отправляем сообщение
+                await client.send_message(self.status_chat, message)
+                logger.info(f"✅ Статус отправлен в {self.status_chat}")
+            finally:
+                # Гарантированно отключаемся от клиента
+                await client.disconnect()
+                logger.debug("StatusReporter: client disconnected")
 
         except Exception as e:
             logger.error(f"❌ Ошибка отправки статуса: {e}", exc_info=True)
