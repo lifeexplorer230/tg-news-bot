@@ -1,5 +1,8 @@
 """Сервис отправки статуса бота в Telegram группу"""
 
+import time
+from pathlib import Path
+
 from telethon import TelegramClient
 
 from database.db import Database
@@ -31,12 +34,55 @@ class StatusReporter:
         self.status_chat = config.get("status.chat", "Soft Status")
         self.bot_name = config.get("status.bot_name", "Marketplace News Bot")
         self.message_template = config.get("status.message_template", "")
+        self.heartbeat_path = Path(config.get("listener.heartbeat_path", "./logs/listener.heartbeat"))
+        self.heartbeat_max_age = config.get("listener.heartbeat_max_age", 180)
+
+    def _check_listener_status(self) -> dict:
+        """
+        Проверить состояние Listener через heartbeat файл
+
+        Returns:
+            dict с информацией о listener: status, age, status_emoji
+        """
+        if not self.heartbeat_path.exists():
+            return {
+                "listener_status": "❌ Не работает",
+                "listener_age_seconds": None,
+                "listener_status_emoji": "❌",
+            }
+
+        try:
+            mtime = self.heartbeat_path.stat().st_mtime
+            age = time.time() - mtime
+
+            if age > self.heartbeat_max_age:
+                return {
+                    "listener_status": f"⚠️ Не отвечает ({int(age)}с)",
+                    "listener_age_seconds": int(age),
+                    "listener_status_emoji": "⚠️",
+                }
+
+            return {
+                "listener_status": f"✅ Работает ({int(age)}с)",
+                "listener_age_seconds": int(age),
+                "listener_status_emoji": "✅",
+            }
+
+        except OSError:
+            return {
+                "listener_status": "❌ Ошибка чтения",
+                "listener_age_seconds": None,
+                "listener_status_emoji": "❌",
+            }
 
     async def send_status(self):
         """Отправить статус в группу"""
         try:
             # Получаем статистику за сегодня (в нужной timezone)
             stats = self.db.get_today_stats(timezone_name=self.timezone_name)
+
+            # Проверяем состояние Listener
+            listener_info = self._check_listener_status()
 
             # Формируем сообщение
             now = now_in_timezone(self.timezone)
@@ -55,6 +101,7 @@ class StatusReporter:
                 "active_channels": stats.get("active_channels", 0),
                 "total_messages": stats.get("total_messages", 0),
                 "total_published": stats.get("total_published", 0),
+                **listener_info,  # Добавляем информацию о listener
             }
 
             template = (self.message_template or "").strip()
@@ -120,7 +167,9 @@ class StatusReporter:
             f"   ⏳ В очереди: {context['unprocessed']}\n\n"
             "📈 **Каналы:**\n"
             f"   🔗 Активных каналов: {context['active_channels']}\n\n"
-            "✅ Бот работает нормально"
+            "🎧 **Listener:**\n"
+            f"   {context['listener_status']}\n\n"
+            f"{context['listener_status_emoji']} Бот работает"
         )
         return message
 

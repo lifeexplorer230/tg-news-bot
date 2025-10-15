@@ -1262,7 +1262,52 @@ class GeminiClient:
         if len(messages) <= chunk_size:
             # Малый список: обрабатываем за один запрос
             logger.info(f"Обработка {len(messages)} сообщений для 3 категорий (один запрос)")
-            return self._process_categories_chunk(messages, wb_count, ozon_count, general_count)
+            all_categories = self._process_categories_chunk(messages, wb_count, ozon_count, general_count)
+
+            # Применяем компенсацию для малого списка тоже
+            all_categories["wildberries"].sort(key=lambda x: x.get("score", 0), reverse=True)
+            all_categories["ozon"].sort(key=lambda x: x.get("score", 0), reverse=True)
+            all_categories["general"].sort(key=lambda x: x.get("score", 0), reverse=True)
+
+            target_total = wb_count + ozon_count + general_count
+
+            final_categories = {
+                "wildberries": all_categories["wildberries"][:wb_count],
+                "ozon": all_categories["ozon"][:ozon_count],
+                "general": all_categories["general"][:general_count],
+            }
+
+            current_total = sum(len(v) for v in final_categories.values())
+            shortage = target_total - current_total
+
+            if shortage > 0:
+                logger.info(f"Недостаточно новостей: {current_total}/{target_total}. Компенсируем {shortage} из других категорий")
+
+                remaining = []
+                remaining.extend(all_categories["wildberries"][wb_count:])
+                remaining.extend(all_categories["ozon"][ozon_count:])
+                remaining.extend(all_categories["general"][general_count:])
+
+                remaining.sort(key=lambda x: x.get("score", 0), reverse=True)
+                compensated = remaining[:shortage]
+
+                for news in compensated:
+                    category = news.get('category', 'general')
+                    if category in final_categories:
+                        final_categories[category].append(news)
+                    else:
+                        final_categories['general'].append(news)
+
+            wb_len = len(final_categories["wildberries"])
+            ozon_len = len(final_categories["ozon"])
+            gen_len = len(final_categories["general"])
+            total = wb_len + ozon_len + gen_len
+
+            logger.info(
+                f"Gemini отобрал: WB={wb_len}, Ozon={ozon_len}, Общие={gen_len}, Всего={total}/{target_total}"
+            )
+
+            return final_categories
 
         # Большой список: разбиваем на чанки
         chunks = self._chunk_list(messages, chunk_size)
@@ -1283,23 +1328,53 @@ class GeminiClient:
             for category_name in ["wildberries", "ozon", "general"]:
                 all_categories[category_name].extend(chunk_results.get(category_name, []))
 
-        # Сортируем каждую категорию по score и берём нужное количество
+        # Сортируем каждую категорию по score
         all_categories["wildberries"].sort(key=lambda x: x.get("score", 0), reverse=True)
         all_categories["ozon"].sort(key=lambda x: x.get("score", 0), reverse=True)
         all_categories["general"].sort(key=lambda x: x.get("score", 0), reverse=True)
 
+        # КОМПЕНСАЦИЯ: Если какой-то категории не хватает → перераспределяем на другие
+        target_total = wb_count + ozon_count + general_count
+
+        # Сначала берём сколько есть из каждой категории
         final_categories = {
             "wildberries": all_categories["wildberries"][:wb_count],
             "ozon": all_categories["ozon"][:ozon_count],
             "general": all_categories["general"][:general_count],
         }
 
+        current_total = sum(len(v) for v in final_categories.values())
+        shortage = target_total - current_total
+
+        if shortage > 0:
+            logger.info(f"Недостаточно новостей: {current_total}/{target_total}. Компенсируем {shortage} из других категорий")
+
+            # Собираем оставшиеся новости из всех категорий
+            remaining = []
+            remaining.extend(all_categories["wildberries"][wb_count:])
+            remaining.extend(all_categories["ozon"][ozon_count:])
+            remaining.extend(all_categories["general"][general_count:])
+
+            # Сортируем по score и берём недостающее количество
+            remaining.sort(key=lambda x: x.get("score", 0), reverse=True)
+            compensated = remaining[:shortage]
+
+            # Добавляем в соответствующие категории
+            for news in compensated:
+                # Определяем категорию по source_message_id или по ключевым словам
+                category = news.get('category', 'general')
+                if category in final_categories:
+                    final_categories[category].append(news)
+                else:
+                    final_categories['general'].append(news)
+
         wb_len = len(final_categories["wildberries"])
         ozon_len = len(final_categories["ozon"])
         gen_len = len(final_categories["general"])
+        total = wb_len + ozon_len + gen_len
 
         logger.info(
-            f"CR-C6: Gemini отобрал топовые новости: WB={wb_len}, Ozon={ozon_len}, Общие={gen_len} "
+            f"CR-C6: Gemini отобрал топовые новости: WB={wb_len}, Ozon={ozon_len}, Общие={gen_len}, Всего={total}/{target_total} "
             f"из {len(messages)} сообщений ({len(chunks)} чанков)"
         )
 
