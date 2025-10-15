@@ -198,9 +198,12 @@ class NewsProcessor:
 
         if not filtered_messages:
             # Помечаем все отфильтрованные как processed
-            # Sprint 6.3: Неблокирующий доступ к БД
-            for msg_id, reason in all_rejected.items():
-                await asyncio.to_thread(self.db.mark_as_processed, msg_id, rejection_reason=reason)
+            # Sprint 6.4: Батч-обработка вместо N вызовов
+            updates = [
+                {'message_id': msg_id, 'rejection_reason': reason}
+                for msg_id, reason in all_rejected.items()
+            ]
+            await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
             logger.info(f"Нет сообщений про {marketplace} после фильтрации")
             return
 
@@ -211,14 +214,16 @@ class NewsProcessor:
 
         if not unique_messages:
             # Помечаем все отфильтрованные как processed
-            # Sprint 6.3: Неблокирующий доступ к БД
-            for msg_id, reason in all_rejected.items():
-                await asyncio.to_thread(
-                    self.db.mark_as_processed,
-                    msg_id,
-                    is_duplicate=(reason == "is_duplicate"),
-                    rejection_reason=reason
-                )
+            # Sprint 6.4: Батч-обработка вместо N вызовов
+            updates = [
+                {
+                    'message_id': msg_id,
+                    'is_duplicate': (reason == "is_duplicate"),
+                    'rejection_reason': reason
+                }
+                for msg_id, reason in all_rejected.items()
+            ]
+            await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
             logger.warning("Все сообщения являются дубликатами")
             return
 
@@ -231,9 +236,12 @@ class NewsProcessor:
         )
 
         if not formatted_posts:
-            # Sprint 6.3: Неблокирующий доступ к БД
-            for msg in unique_messages:
-                await asyncio.to_thread(self.db.mark_as_processed, msg["id"], rejection_reason="rejected_by_llm")
+            # Sprint 6.4: Батч-обработка вместо N вызовов
+            updates = [
+                {'message_id': msg["id"], 'rejection_reason': "rejected_by_llm"}
+                for msg in unique_messages
+            ]
+            await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
             logger.warning(f"Gemini не отобрал ни одной новости для {marketplace}")
             return
 
@@ -243,15 +251,21 @@ class NewsProcessor:
         formatted_posts = sorted(formatted_posts, key=lambda x: x.get("score", 0), reverse=True)
 
         formatted_ids = {post["source_message_id"] for post in formatted_posts}
-        # Sprint 6.3: Неблокирующий доступ к БД
-        for msg in unique_messages:
-            if msg["id"] not in formatted_ids:
-                await asyncio.to_thread(self.db.mark_as_processed, msg["id"], rejection_reason="rejected_by_llm")
+        # Sprint 6.4: Батч-обработка вместо N вызовов
+        updates = [
+            {'message_id': msg["id"], 'rejection_reason': "rejected_by_llm"}
+            for msg in unique_messages
+            if msg["id"] not in formatted_ids
+        ]
+        await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
 
         # Помечаем сообщения как обработанные
-        # Sprint 6.3: Неблокирующий доступ к БД
-        for post in formatted_posts:
-            await asyncio.to_thread(self.db.mark_as_processed, post["source_message_id"], gemini_score=post.get("score"))
+        # Sprint 6.4: Батч-обработка вместо N вызовов
+        updates = [
+            {'message_id': post["source_message_id"], 'gemini_score': post.get("score")}
+            for post in formatted_posts
+        ]
+        await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
 
         # ШАГ 5: Модерация (если включена)
         if self.moderation_enabled:
@@ -274,14 +288,16 @@ class NewsProcessor:
 
         # ШАГ 7: Помечаем все отфильтрованные сообщения как processed
         # (которые не были помечены ранее)
-        # Sprint 6.3: Неблокирующий доступ к БД
-        for msg_id, reason in all_rejected.items():
-            await asyncio.to_thread(
-                self.db.mark_as_processed,
-                msg_id,
-                is_duplicate=(reason == "is_duplicate"),
-                rejection_reason=reason
-            )
+        # Sprint 6.4: Батч-обработка вместо N вызовов
+        updates = [
+            {
+                'message_id': msg_id,
+                'is_duplicate': (reason == "is_duplicate"),
+                'rejection_reason': reason
+            }
+            for msg_id, reason in all_rejected.items()
+        ]
+        await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
 
         logger.info(f"✅ Обработка {marketplace} завершена!")
 
@@ -508,9 +524,12 @@ class NewsProcessor:
 
         if not filtered_messages:
             # Помечаем отфильтрованные как processed
-            # Sprint 6.3: Неблокирующий доступ к БД
-            for msg_id, reason in all_rejected.items():
-                await asyncio.to_thread(self.db.mark_as_processed, msg_id, rejection_reason=reason)
+            # Sprint 6.4: Батч-обработка вместо N вызовов
+            updates = [
+                {'message_id': msg_id, 'rejection_reason': reason}
+                for msg_id, reason in all_rejected.items()
+            ]
+            await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
             logger.info("Нет сообщений после фильтрации исключений")
             return
 
@@ -521,14 +540,16 @@ class NewsProcessor:
 
         if not unique_messages:
             # Помечаем все отфильтрованные как processed
-            # Sprint 6.3: Неблокирующий доступ к БД
-            for msg_id, reason in all_rejected.items():
-                await asyncio.to_thread(
-                    self.db.mark_as_processed,
-                    msg_id,
-                    is_duplicate=(reason == "is_duplicate"),
-                    rejection_reason=reason
-                )
+            # Sprint 6.4: Батч-обработка вместо N вызовов
+            updates = [
+                {
+                    'message_id': msg_id,
+                    'is_duplicate': (reason == "is_duplicate"),
+                    'rejection_reason': reason
+                }
+                for msg_id, reason in all_rejected.items()
+            ]
+            await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
             logger.warning("Все сообщения являются дубликатами")
             return
 
@@ -556,9 +577,12 @@ class NewsProcessor:
 
         if total_count == 0:
             logger.warning("Gemini не отобрал ни одной новости")
-            # Sprint 6.3: Неблокирующий доступ к БД
-            for msg in unique_messages:
-                await asyncio.to_thread(self.db.mark_as_processed, msg["id"], rejection_reason="rejected_by_llm")
+            # Sprint 6.4: Батч-обработка вместо N вызовов
+            updates = [
+                {'message_id': msg["id"], 'rejection_reason': "rejected_by_llm"}
+                for msg in unique_messages
+            ]
+            await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
             return
 
         # ШАГ 5: Модерация (выбор 10 из 15)
@@ -567,9 +591,12 @@ class NewsProcessor:
 
             if not approved_posts:
                 logger.warning("Все новости отклонены на этапе модерации")
-                # Sprint 6.3: Неблокирующий доступ к БД
-                for msg_id in selected_ids:
-                    await asyncio.to_thread(self.db.mark_as_processed, msg_id, rejection_reason="rejected_by_moderator")
+                # Sprint 6.4: Батч-обработка вместо N вызовов
+                updates = [
+                    {'message_id': msg_id, 'rejection_reason': "rejected_by_moderator"}
+                    for msg_id in selected_ids
+                ]
+                await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
                 return
         else:
             # Без модерации - берем все что есть (динамически для всех категорий)
@@ -582,22 +609,31 @@ class NewsProcessor:
         }
 
         # Помечаем сообщения, которые прошли отбор Gemini, но не попали в итоговую публикацию
-        # Sprint 6.3: Неблокирующий доступ к БД
+        # Sprint 6.4: Батч-обработка вместо N вызовов
         rejected_after_moderation = selected_ids - approved_ids
-        for msg_id in rejected_after_moderation:
-            await asyncio.to_thread(self.db.mark_as_processed, msg_id, rejection_reason="rejected_by_moderator")
+        updates = [
+            {'message_id': msg_id, 'rejection_reason': "rejected_by_moderator"}
+            for msg_id in rejected_after_moderation
+        ]
+        await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
 
         # Помечаем сообщения, которые Gemini не выбрал вовсе
-        # Sprint 6.3: Неблокирующий доступ к БД
+        # Sprint 6.4: Батч-обработка вместо N вызовов
         unique_ids = {msg["id"] for msg in unique_messages}
         not_selected_ids = unique_ids - selected_ids
-        for msg_id in not_selected_ids:
-            await asyncio.to_thread(self.db.mark_as_processed, msg_id, rejection_reason="rejected_by_llm")
+        updates = [
+            {'message_id': msg_id, 'rejection_reason': "rejected_by_llm"}
+            for msg_id in not_selected_ids
+        ]
+        await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
 
         # Помечаем сообщения как обработанные
-        # Sprint 6.3: Неблокирующий доступ к БД
-        for post in approved_posts:
-            await asyncio.to_thread(self.db.mark_as_processed, post["source_message_id"], gemini_score=post.get("score"))
+        # Sprint 6.4: Батч-обработка вместо N вызовов
+        updates = [
+            {'message_id': post["source_message_id"], 'gemini_score': post.get("score")}
+            for post in approved_posts
+        ]
+        await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
 
         # ШАГ 6: Публикация в канал
         target_channel = (
@@ -617,14 +653,16 @@ class NewsProcessor:
         )
 
         # ШАГ 7: Помечаем все отфильтрованные сообщения как processed
-        # Sprint 6.3: Неблокирующий доступ к БД
-        for msg_id, reason in all_rejected.items():
-            await asyncio.to_thread(
-                self.db.mark_as_processed,
-                msg_id,
-                is_duplicate=(reason == "is_duplicate"),
-                rejection_reason=reason
-            )
+        # Sprint 6.4: Батч-обработка вместо N вызовов
+        updates = [
+            {
+                'message_id': msg_id,
+                'is_duplicate': (reason == "is_duplicate"),
+                'rejection_reason': reason
+            }
+            for msg_id, reason in all_rejected.items()
+        ]
+        await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
 
         logger.info("✅ Обработка всех категорий завершена!")
 
