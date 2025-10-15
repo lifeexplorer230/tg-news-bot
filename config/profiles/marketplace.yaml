@@ -35,14 +35,14 @@ processor:
   schedule_time: '09:00'
   timezone: Europe/Moscow
   duplicate_threshold: 0.85
-  top_n: 10
+  top_n: 15
   exclude_count: 5
 
-marketplaces:
+# 3-категорийная система для дайджеста маркетплейсов
+categories:
   - name: ozon
     display_name: Ozon
     enabled: true
-    top_n: 10
     target_channel: '@rnpozwb'
     keywords:
       - ozon
@@ -53,10 +53,10 @@ marketplaces:
       - курс
       - промокод
       - обучение платное
+
   - name: wildberries
     display_name: Wildberries
     enabled: true
-    top_n: 10
     target_channel: '@rnpozwb'
     keywords:
       - wildberries
@@ -70,14 +70,39 @@ marketplaces:
       - промокод
       - обучение платное
 
+  - name: general
+    display_name: Общее
+    enabled: true
+    target_channel: '@rnpozwb'
+    keywords:
+      - маркетплейс
+      - marketplace
+      - электронная торговля
+      - ecommerce
+      - селлер
+      - seller
+      - яндекс маркет
+      - yandex market
+      - авито
+      - avito
+      - закон
+      - налог
+      - ФНС
+      - минторг
+    exclude_keywords:
+      - реклама
+      - курс
+      - промокод
+      - обучение платное
+
 channels:
   all_digest:
     enabled: true
     target_channel: '@rnpozwb'
     category_counts:
-      wildberries: 5
-      ozon: 5
-      general: 5
+      ozon: 6          # Идеально 6 новостей про Ozon
+      wildberries: 6   # Идеально 6 новостей про Wildberries
+      general: 3       # 3 новости про другие маркетплейсы/законы/е-торговлю
 
 moderation:
   enabled: true
