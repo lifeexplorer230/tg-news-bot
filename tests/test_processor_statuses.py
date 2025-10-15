@@ -42,6 +42,16 @@ class FakeDB:
         state["gemini_score"] = gemini_score
         state["rejection_reason"] = rejection_reason
 
+    def mark_as_processed_batch(self, updates):
+        """Батч-обработка для тестов"""
+        for update in updates:
+            self.mark_as_processed(
+                update['message_id'],
+                is_duplicate=update.get('is_duplicate', False),
+                gemini_score=update.get('gemini_score'),
+                rejection_reason=update.get('rejection_reason')
+            )
+
 
 class FakeClient:
     async def send_message(self, *args, **kwargs):
