@@ -31,6 +31,10 @@ class NewsProcessor:
         self._cached_published_embeddings: list[tuple[int, any]] | None = None
         # QA-7: _cached_base_messages удалён как мёртвый код (не используется)
 
+        # QA-4: Кэш матрицы embeddings для оптимизации дедупликации O(N²) → O(N)
+        self._published_embeddings_matrix: np.ndarray | None = None
+        self._published_embeddings_ids: list[int] | None = None
+
         self._embedding_model_name = config.get(
             "embeddings.model", "paraphrase-multilingual-MiniLM-L12-v2"
         )
@@ -328,6 +332,15 @@ class NewsProcessor:
 
         published_embeddings = self._cached_published_embeddings
 
+        # QA-4: Строим матрицу embeddings один раз для всех проверок
+        if self._published_embeddings_matrix is None and published_embeddings:
+            self._published_embeddings_ids = [post_id for post_id, _ in published_embeddings]
+            self._published_embeddings_matrix = np.array([emb for _, emb in published_embeddings])
+            logger.debug(
+                f"QA-4: Построена матрица embeddings {self._published_embeddings_matrix.shape} "
+                f"для оптимизации дедупликации"
+            )
+
         # CR-C5: Батчевое кодирование всех сообщений сразу (async, non-blocking)
         texts = [msg["text"] for msg in messages]
         embeddings_array = await self.embeddings.encode_batch_async(texts, batch_size=32)
@@ -351,6 +364,7 @@ class NewsProcessor:
     def _update_published_cache(self, post_ids: list[int], embeddings: list[np.ndarray]):
         """
         QA-2: Обновить кэш published embeddings после публикации
+        QA-4: Также обновляем матрицу embeddings для оптимизации дедупликации
 
         Инкрементально добавляет новые embeddings в кэш, чтобы последующие
         категории в том же запуске могли детектировать дубликаты.
@@ -368,6 +382,17 @@ class NewsProcessor:
         new_entries = list(zip(post_ids, embeddings))
         self._cached_published_embeddings.extend(new_entries)
 
+        # QA-4: Обновляем матрицу embeddings инкрементально
+        if self._published_embeddings_matrix is not None and len(embeddings) > 0:
+            # Добавляем новые векторы к существующей матрице
+            new_matrix = np.array(embeddings)
+            self._published_embeddings_matrix = np.vstack([self._published_embeddings_matrix, new_matrix])
+            self._published_embeddings_ids.extend(post_ids)
+
+            logger.debug(
+                f"QA-4: Обновлена матрица embeddings, новый размер: {self._published_embeddings_matrix.shape}"
+            )
+
         logger.debug(
             f"QA-2: Добавлено {len(new_entries)} embeddings в кэш. "
             f"Всего в кэше: {len(self._cached_published_embeddings)}"
@@ -379,16 +404,18 @@ class NewsProcessor:
         """
         Проверить дубликат inline без обращения к БД (оптимизация CR-H1)
         Оптимизировано (CR-C5): используем batch_cosine_similarity для векторизации
+        Оптимизировано (QA-4): переиспользуем кэшированную матрицу вместо пересоздания
 
         Args:
             embedding: Embedding для проверки
-            published_embeddings: Список (post_id, published_embedding)
+            published_embeddings: Список (post_id, published_embedding) - не используется напрямую
             threshold: Порог схожести
 
         Returns:
             True если найден дубликат
         """
-        if not published_embeddings:
+        # QA-4: Используем кэшированную матрицу вместо пересоздания каждый раз
+        if self._published_embeddings_matrix is None or len(self._published_embeddings_matrix) == 0:
             return False
 
         embedding_norm = np.linalg.norm(embedding)
@@ -396,20 +423,17 @@ class NewsProcessor:
             logger.warning("Получен embedding с нулевой нормой при проверке дубликатов")
             return False
 
-        # CR-C5: Векторизованная проверка similarity для всех embeddings сразу
-        # Извлекаем только embeddings (без post_id) и формируем матрицу
-        embeddings_matrix = np.array([emb for _, emb in published_embeddings])
-
+        # QA-4: Используем готовую матрицу (переиспользуем для всех проверок)
         # Вычисляем все similarity scores за один раз
-        similarities = self.embeddings.batch_cosine_similarity(embedding, embeddings_matrix)
+        similarities = self.embeddings.batch_cosine_similarity(embedding, self._published_embeddings_matrix)
 
         # Находим максимальную схожесть
         if len(similarities) > 0:
             max_similarity = np.max(similarities)
             if max_similarity >= threshold:
-                # Находим post_id с максимальной схожестью для логирования
+                # QA-4: Находим post_id из кэшированного списка IDs
                 max_idx = np.argmax(similarities)
-                post_id = published_embeddings[max_idx][0]
+                post_id = self._published_embeddings_ids[max_idx]
                 logger.debug(
                     f"Найден дубликат: post_id={post_id}, similarity={max_similarity:.3f}"
                 )
