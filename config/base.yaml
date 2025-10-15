@@ -113,7 +113,10 @@ status:
     📈 **Каналы:**
       🔗 Активных каналов: {active_channels}
 
-    ✅ Бот работает нормально
+    🎧 **Listener:**
+      {listener_status}
+
+    {listener_status_emoji} Бот работает
 
 logging:
   level: INFO                # Уровень логирования: DEBUG, INFO, WARNING, ERROR
