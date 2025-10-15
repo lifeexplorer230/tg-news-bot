@@ -119,9 +119,9 @@ class TestCacheUpdate:
         # Используем embedding очень похожий на первый (почти идентичный)
         duplicate_embedding = np.array([0.99, 0.01, 0.0])
 
+        # Sprint 6.3.4: удалён параметр published_embeddings
         is_duplicate = processor._check_duplicate_inline(
             duplicate_embedding,
-            processor._cached_published_embeddings,
             threshold=0.85,
         )
 
@@ -146,9 +146,9 @@ class TestCacheUpdate:
         # Проверяем уникальный embedding для второй категории (ортогональный)
         unique_embedding = np.array([0.0, 0.0, 1.0])
 
+        # Sprint 6.3.4: удалён параметр published_embeddings
         is_duplicate = processor._check_duplicate_inline(
             unique_embedding,
-            processor._cached_published_embeddings,
             threshold=0.85,
         )
 
@@ -164,8 +164,9 @@ class TestCacheUpdate:
 
         embedding = np.array([1.0, 2.0, 3.0])
 
+        # Sprint 6.3.4: удалён параметр published_embeddings
         is_duplicate = processor._check_duplicate_inline(
-            embedding, processor._cached_published_embeddings, threshold=0.85
+            embedding, threshold=0.85
         )
 
         assert is_duplicate is False
