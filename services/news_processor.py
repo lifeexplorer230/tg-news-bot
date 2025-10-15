@@ -176,7 +176,8 @@ class NewsProcessor:
 
         # ШАГ 1: Загружаем сообщения (из кэша или БД)
         if base_messages is None:
-            base_messages = self.db.get_unprocessed_messages(hours=24)
+            # Sprint 6.3: Неблокирующий доступ к БД
+            base_messages = await asyncio.to_thread(self.db.get_unprocessed_messages, hours=24)
             logger.info(f"Загружено {len(base_messages)} необработанных сообщений из БД")
         else:
             logger.info(f"Используем {len(base_messages)} кэшированных сообщений (CR-H1)")
@@ -197,8 +198,9 @@ class NewsProcessor:
 
         if not filtered_messages:
             # Помечаем все отфильтрованные как processed
+            # Sprint 6.3: Неблокирующий доступ к БД
             for msg_id, reason in all_rejected.items():
-                self.db.mark_as_processed(msg_id, rejection_reason=reason)
+                await asyncio.to_thread(self.db.mark_as_processed, msg_id, rejection_reason=reason)
             logger.info(f"Нет сообщений про {marketplace} после фильтрации")
             return
 
@@ -209,8 +211,10 @@ class NewsProcessor:
 
         if not unique_messages:
             # Помечаем все отфильтрованные как processed
+            # Sprint 6.3: Неблокирующий доступ к БД
             for msg_id, reason in all_rejected.items():
-                self.db.mark_as_processed(
+                await asyncio.to_thread(
+                    self.db.mark_as_processed,
                     msg_id,
                     is_duplicate=(reason == "is_duplicate"),
                     rejection_reason=reason
@@ -227,8 +231,9 @@ class NewsProcessor:
         )
 
         if not formatted_posts:
+            # Sprint 6.3: Неблокирующий доступ к БД
             for msg in unique_messages:
-                self.db.mark_as_processed(msg["id"], rejection_reason="rejected_by_llm")
+                await asyncio.to_thread(self.db.mark_as_processed, msg["id"], rejection_reason="rejected_by_llm")
             logger.warning(f"Gemini не отобрал ни одной новости для {marketplace}")
             return
 
@@ -238,13 +243,15 @@ class NewsProcessor:
         formatted_posts = sorted(formatted_posts, key=lambda x: x.get("score", 0), reverse=True)
 
         formatted_ids = {post["source_message_id"] for post in formatted_posts}
+        # Sprint 6.3: Неблокирующий доступ к БД
         for msg in unique_messages:
             if msg["id"] not in formatted_ids:
-                self.db.mark_as_processed(msg["id"], rejection_reason="rejected_by_llm")
+                await asyncio.to_thread(self.db.mark_as_processed, msg["id"], rejection_reason="rejected_by_llm")
 
         # Помечаем сообщения как обработанные
+        # Sprint 6.3: Неблокирующий доступ к БД
         for post in formatted_posts:
-            self.db.mark_as_processed(post["source_message_id"], gemini_score=post.get("score"))
+            await asyncio.to_thread(self.db.mark_as_processed, post["source_message_id"], gemini_score=post.get("score"))
 
         # ШАГ 5: Модерация (если включена)
         if self.moderation_enabled:
@@ -267,8 +274,10 @@ class NewsProcessor:
 
         # ШАГ 7: Помечаем все отфильтрованные сообщения как processed
         # (которые не были помечены ранее)
+        # Sprint 6.3: Неблокирующий доступ к БД
         for msg_id, reason in all_rejected.items():
-            self.db.mark_as_processed(
+            await asyncio.to_thread(
+                self.db.mark_as_processed,
                 msg_id,
                 is_duplicate=(reason == "is_duplicate"),
                 rejection_reason=reason
@@ -326,8 +335,9 @@ class NewsProcessor:
             return unique, rejected
 
         # CR-H1: Загружаем published embeddings один раз и кэшируем
+        # Sprint 6.3: Неблокирующий доступ к БД
         if self._cached_published_embeddings is None:
-            self._cached_published_embeddings = self.db.get_published_embeddings(days=60)
+            self._cached_published_embeddings = await asyncio.to_thread(self.db.get_published_embeddings, days=60)
             logger.debug(f"Загружено {len(self._cached_published_embeddings)} published embeddings в кэш")
 
         published_embeddings = self._cached_published_embeddings
@@ -472,7 +482,8 @@ class NewsProcessor:
         logger.info("📦 ОБРАБОТКА НОВОСТЕЙ: ВСЕ КАТЕГОРИИ (3-КАТЕГОРИЙНАЯ СИСТЕМА)")
         logger.info("=" * 80)
 
-        base_messages = self.db.get_unprocessed_messages(hours=24)
+        # Sprint 6.3: Неблокирующий доступ к БД
+        base_messages = await asyncio.to_thread(self.db.get_unprocessed_messages, hours=24)
         logger.info(f"Загружено {len(base_messages)} необработанных сообщений")
 
         if not base_messages:
@@ -497,8 +508,9 @@ class NewsProcessor:
 
         if not filtered_messages:
             # Помечаем отфильтрованные как processed
+            # Sprint 6.3: Неблокирующий доступ к БД
             for msg_id, reason in all_rejected.items():
-                self.db.mark_as_processed(msg_id, rejection_reason=reason)
+                await asyncio.to_thread(self.db.mark_as_processed, msg_id, rejection_reason=reason)
             logger.info("Нет сообщений после фильтрации исключений")
             return
 
@@ -509,8 +521,10 @@ class NewsProcessor:
 
         if not unique_messages:
             # Помечаем все отфильтрованные как processed
+            # Sprint 6.3: Неблокирующий доступ к БД
             for msg_id, reason in all_rejected.items():
-                self.db.mark_as_processed(
+                await asyncio.to_thread(
+                    self.db.mark_as_processed,
                     msg_id,
                     is_duplicate=(reason == "is_duplicate"),
                     rejection_reason=reason
@@ -542,8 +556,9 @@ class NewsProcessor:
 
         if total_count == 0:
             logger.warning("Gemini не отобрал ни одной новости")
+            # Sprint 6.3: Неблокирующий доступ к БД
             for msg in unique_messages:
-                self.db.mark_as_processed(msg["id"], rejection_reason="rejected_by_llm")
+                await asyncio.to_thread(self.db.mark_as_processed, msg["id"], rejection_reason="rejected_by_llm")
             return
 
         # ШАГ 5: Модерация (выбор 10 из 15)
@@ -552,8 +567,9 @@ class NewsProcessor:
 
             if not approved_posts:
                 logger.warning("Все новости отклонены на этапе модерации")
+                # Sprint 6.3: Неблокирующий доступ к БД
                 for msg_id in selected_ids:
-                    self.db.mark_as_processed(msg_id, rejection_reason="rejected_by_moderator")
+                    await asyncio.to_thread(self.db.mark_as_processed, msg_id, rejection_reason="rejected_by_moderator")
                 return
         else:
             # Без модерации - берем все что есть (динамически для всех категорий)
@@ -566,19 +582,22 @@ class NewsProcessor:
         }
 
         # Помечаем сообщения, которые прошли отбор Gemini, но не попали в итоговую публикацию
+        # Sprint 6.3: Неблокирующий доступ к БД
         rejected_after_moderation = selected_ids - approved_ids
         for msg_id in rejected_after_moderation:
-            self.db.mark_as_processed(msg_id, rejection_reason="rejected_by_moderator")
+            await asyncio.to_thread(self.db.mark_as_processed, msg_id, rejection_reason="rejected_by_moderator")
 
         # Помечаем сообщения, которые Gemini не выбрал вовсе
+        # Sprint 6.3: Неблокирующий доступ к БД
         unique_ids = {msg["id"] for msg in unique_messages}
         not_selected_ids = unique_ids - selected_ids
         for msg_id in not_selected_ids:
-            self.db.mark_as_processed(msg_id, rejection_reason="rejected_by_llm")
+            await asyncio.to_thread(self.db.mark_as_processed, msg_id, rejection_reason="rejected_by_llm")
 
         # Помечаем сообщения как обработанные
+        # Sprint 6.3: Неблокирующий доступ к БД
         for post in approved_posts:
-            self.db.mark_as_processed(post["source_message_id"], gemini_score=post.get("score"))
+            await asyncio.to_thread(self.db.mark_as_processed, post["source_message_id"], gemini_score=post.get("score"))
 
         # ШАГ 6: Публикация в канал
         target_channel = (
@@ -598,8 +617,10 @@ class NewsProcessor:
         )
 
         # ШАГ 7: Помечаем все отфильтрованные сообщения как processed
+        # Sprint 6.3: Неблокирующий доступ к БД
         for msg_id, reason in all_rejected.items():
-            self.db.mark_as_processed(
+            await asyncio.to_thread(
+                self.db.mark_as_processed,
                 msg_id,
                 is_duplicate=(reason == "is_duplicate"),
                 rejection_reason=reason
@@ -1052,8 +1073,10 @@ class NewsProcessor:
         logger.debug(f"CR-C5: Batch encoded {len(texts)} posts for saving")
 
         post_ids = []
+        # Sprint 6.3: Неблокирующий доступ к БД
         for post, embedding in zip(posts, embeddings_array):
-            self.db.save_published(
+            await asyncio.to_thread(
+                self.db.save_published,
                 text=post["text"],
                 embedding=embedding,
                 source_message_id=post["source_message_id"],
@@ -1091,7 +1114,8 @@ class NewsProcessor:
                 # СТАРАЯ СИСТЕМА: Обрабатываем каждую категорию отдельно
 
                 # CR-H1: Загружаем сообщения ОДИН раз для всех категорий
-                base_messages = self.db.get_unprocessed_messages(hours=24)
+                # Sprint 6.3: Неблокирующий доступ к БД
+                base_messages = await asyncio.to_thread(self.db.get_unprocessed_messages, hours=24)
                 logger.info(
                     f"📦 CR-H1: Загружено {len(base_messages)} сообщений (будут переиспользованы для {len(self.category_names)} категорий)"
                 )
