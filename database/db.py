@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import pickle  # nosec B403
+import io
 import sqlite3
 import threading
 import time
@@ -335,8 +335,10 @@ class Database:
             ID записи
         """
         cursor = self.conn.cursor()
-        # Сериализуем embedding в bytes
-        embedding_bytes = pickle.dumps(embedding)
+        # Сериализуем embedding в bytes через numpy (безопасно, без pickle)
+        buffer = io.BytesIO()
+        np.save(buffer, embedding, allow_pickle=False)
+        embedding_bytes = buffer.getvalue()
 
         cursor.execute(
             """
@@ -372,7 +374,9 @@ class Database:
 
         results = []
         for row in cursor.fetchall():
-            embedding = pickle.loads(row[1])  # nosec B301
+            # Десериализуем через numpy (безопасно, без pickle)
+            buffer = io.BytesIO(row[1])
+            embedding = np.load(buffer, allow_pickle=False)
             results.append((row[0], embedding))
 
         return results
