@@ -25,6 +25,10 @@ class TestCacheUpdate:
         processor._cached_published_embeddings = None
         processor.duplicate_threshold = 0.85
 
+        # QA-4: Добавляем новые атрибуты для оптимизации дедупликации
+        processor._published_embeddings_matrix = None
+        processor._published_embeddings_ids = None
+
         # Mock для embeddings service с реальной реализацией batch_cosine_similarity
         def mock_batch_cosine_similarity(embedding, embeddings_matrix):
             """Упрощённая реализация batch cosine similarity для тестов"""
@@ -100,6 +104,10 @@ class TestCacheUpdate:
             np.array([0.0, 1.0, 0.0]),
         ]
 
+        # QA-4: Инициализируем матрицу для проверки дубликатов
+        processor._published_embeddings_ids = post_ids_category1.copy()
+        processor._published_embeddings_matrix = np.array(embeddings_category1)
+
         # Обновляем кэш после "публикации" первой категории
         processor._update_published_cache(post_ids_category1, embeddings_category1)
 
@@ -129,6 +137,10 @@ class TestCacheUpdate:
             np.array([0.0, 1.0, 0.0]),
         ]
 
+        # QA-4: Инициализируем матрицу для проверки дубликатов
+        processor._published_embeddings_ids = post_ids_category1.copy()
+        processor._published_embeddings_matrix = np.array(embeddings_category1)
+
         processor._update_published_cache(post_ids_category1, embeddings_category1)
 
         # Проверяем уникальный embedding для второй категории (ортогональный)
@@ -146,6 +158,9 @@ class TestCacheUpdate:
     def test_empty_cache_returns_no_duplicates(self, processor):
         """QA-2: Пустой кэш не детектирует дубликаты"""
         processor._cached_published_embeddings = []
+        # QA-4: Пустая матрица также пуста
+        processor._published_embeddings_matrix = np.array([])
+        processor._published_embeddings_ids = []
 
         embedding = np.array([1.0, 2.0, 3.0])
 
