@@ -152,8 +152,8 @@ class TelegramListener:
                         logger.debug(f"Канал не входит в whitelist: @{username} - {title}")
                     continue
 
-                # Добавляем в БД
-                self.db.add_channel(username, title)
+                # QA-3: Добавляем в БД неблокирующим способом
+                await asyncio.to_thread(self.db.add_channel, username, title)
                 if dialog.entity.id not in self._channel_id_set:
                     self.channel_ids.append(dialog.entity.id)
                     self._channel_id_set.add(dialog.entity.id)
@@ -214,7 +214,8 @@ class TelegramListener:
                     logger.debug(f"Канал не входит в whitelist: @{username} - {title}")
                 continue
 
-            self.db.add_channel(username, title)
+            # QA-3: Добавляем в БД неблокирующим способом
+            await asyncio.to_thread(self.db.add_channel, username, title)
             if entity.id in self._channel_id_set:
                 skipped_duplicates += 1
                 logger.debug(f"Канал уже добавлен ранее: @{username}")
@@ -267,15 +268,16 @@ class TelegramListener:
             chat = await event.get_chat()
             username = chat.username or str(chat.id)
 
-            # Получаем channel_id из БД
-            channel_id = self.db.get_channel_id(username)
+            # QA-3: Получаем channel_id из БД неблокирующим способом
+            channel_id = await asyncio.to_thread(self.db.get_channel_id, username)
             if not channel_id:
                 # Если канала нет в БД (странно), добавляем
-                channel_id = self.db.add_channel(username, chat.title)
+                channel_id = await asyncio.to_thread(self.db.add_channel, username, chat.title)
 
-            # Сохраняем сообщение
+            # QA-3: Сохраняем сообщение неблокирующим способом
             has_media = message.media is not None
-            saved_id = self.db.save_message(
+            saved_id = await asyncio.to_thread(
+                self.db.save_message,
                 channel_id=channel_id,
                 message_id=message.id,
                 text=text,

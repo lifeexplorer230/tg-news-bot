@@ -348,6 +348,31 @@ class NewsProcessor:
 
         return unique, rejected
 
+    def _update_published_cache(self, post_ids: list[int], embeddings: list[np.ndarray]):
+        """
+        QA-2: Обновить кэш published embeddings после публикации
+
+        Инкрементально добавляет новые embeddings в кэш, чтобы последующие
+        категории в том же запуске могли детектировать дубликаты.
+
+        Args:
+            post_ids: Список source_message_id опубликованных постов
+            embeddings: Соответствующие embeddings
+        """
+        if self._cached_published_embeddings is None:
+            # Кэш ещё не инициализирован - инициализируем
+            self._cached_published_embeddings = []
+            logger.debug("QA-2: Инициализирован кэш published embeddings")
+
+        # Добавляем новые embeddings в кэш
+        new_entries = list(zip(post_ids, embeddings))
+        self._cached_published_embeddings.extend(new_entries)
+
+        logger.debug(
+            f"QA-2: Добавлено {len(new_entries)} embeddings в кэш. "
+            f"Всего в кэше: {len(self._cached_published_embeddings)}"
+        )
+
     def _check_duplicate_inline(
         self, embedding: np.ndarray, published_embeddings: list, threshold: float = 0.85
     ) -> bool:
@@ -859,6 +884,50 @@ class NewsProcessor:
 
         return "\n".join(lines)
 
+    @staticmethod
+    def _ensure_post_fields(post: dict) -> dict:
+        """
+        QA-1: Fallback-форматирование для постов без title/description
+
+        Гарантирует наличие обязательных полей в посте.
+        Если title или description отсутствуют, извлекаются из text.
+
+        Args:
+            post: Словарь с данными поста
+
+        Returns:
+            Валидированный пост с гарантированными полями title, description
+        """
+        # Проверяем наличие обязательных полей
+        if "title" not in post or not post["title"]:
+            # Извлекаем title из text
+            text = post.get("text", "")
+            if text:
+                # Берём первую строку или первые 7 слов
+                lines = text.split("\n", 1)
+                first_line = lines[0].strip()
+                words = first_line.split()
+                post["title"] = " ".join(words[:7]) if len(words) > 7 else first_line
+            else:
+                post["title"] = "Без заголовка"
+
+        if "description" not in post or not post["description"]:
+            # Извлекаем description из text
+            text = post.get("text", "")
+            if text:
+                # Берём всё кроме первой строки, или первые 200 символов
+                lines = text.split("\n", 1)
+                if len(lines) > 1:
+                    post["description"] = lines[1].strip()[:200]
+                else:
+                    # Если только одна строка, берём со 2го слова
+                    words = text.split()
+                    post["description"] = " ".join(words[7:]) if len(words) > 7 else text
+            else:
+                post["description"] = "Описание отсутствует"
+
+        return post
+
     async def publish_digest(
         self,
         client: TelegramClient,
@@ -908,6 +977,9 @@ class NewsProcessor:
         }
 
         for idx, post in enumerate(posts, 1):
+            # QA-1: Гарантируем наличие title/description
+            post = self._ensure_post_fields(post)
+
             emoji = number_emojis.get(idx, f"{idx}️⃣")
             lines.append(f"{emoji} **{post['title']}**\n")
             lines.append(f"{post['description']}\n")
@@ -955,6 +1027,7 @@ class NewsProcessor:
         embeddings_array = await self.embeddings.encode_batch_async(texts, batch_size=32)
         logger.debug(f"CR-C5: Batch encoded {len(texts)} posts for saving")
 
+        post_ids = []
         for post, embedding in zip(posts, embeddings_array):
             self.db.save_published(
                 text=post["text"],
@@ -962,8 +1035,12 @@ class NewsProcessor:
                 source_message_id=post["source_message_id"],
                 source_channel_id=post["source_channel_id"],
             )
+            post_ids.append(post["source_message_id"])
 
         logger.info(f"💾 Сохранено {len(posts)} embeddings в БД")
+
+        # QA-2: Обновляем кэш после публикации для детектирования дубликатов в последующих категориях
+        self._update_published_cache(post_ids, list(embeddings_array))
 
     async def run(self, use_categories=True):
         """Запуск обработки для всех категорий
