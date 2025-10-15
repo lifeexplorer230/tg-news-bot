@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from database.db import Database
-from utils.timezone import now_msk
+from utils.timezone import now_msk, now_utc
 
 
 @pytest.fixture
@@ -166,13 +166,13 @@ class TestMessageOperations:
         """Проверить что старые сообщения не возвращаются"""
         channel_id = temp_db.add_channel("test_channel", "Test Channel")
 
-        # Старое сообщение (25 часов назад)
-        old_date = now_msk() - timedelta(hours=25)
+        # Старое сообщение (25 часов назад) - используем UTC для согласованности
+        old_date = now_utc() - timedelta(hours=25)
         temp_db.save_message(channel_id=channel_id, message_id=1, text="Old message", date=old_date)
 
-        # Новое сообщение
+        # Новое сообщение - используем UTC
         temp_db.save_message(
-            channel_id=channel_id, message_id=2, text="New message", date=now_msk()
+            channel_id=channel_id, message_id=2, text="New message", date=now_utc()
         )
 
         unprocessed = temp_db.get_unprocessed_messages(hours=24)
