@@ -193,34 +193,37 @@ class Database:
         Returns:
             ID добавленного канала
         """
-        username = username.lstrip("@")
-        cursor = self.conn.cursor()
+        with self._lock:  # Sprint 6.2: Thread-safe доступ
+            username = username.lstrip("@")
+            cursor = self.conn.cursor()
 
-        try:
-            cursor.execute(
-                "INSERT INTO channels (username, title) VALUES (?, ?)", (username, title)
-            )
-            self.conn.commit()
-            logger.info(f"Добавлен канал: @{username}")
-            return cursor.lastrowid
-        except sqlite3.IntegrityError:
-            # Канал уже существует
-            cursor.execute("SELECT id FROM channels WHERE username = ?", (username,))
-            return cursor.fetchone()[0]
+            try:
+                cursor.execute(
+                    "INSERT INTO channels (username, title) VALUES (?, ?)", (username, title)
+                )
+                self.conn.commit()
+                logger.info(f"Добавлен канал: @{username}")
+                return cursor.lastrowid
+            except sqlite3.IntegrityError:
+                # Канал уже существует
+                cursor.execute("SELECT id FROM channels WHERE username = ?", (username,))
+                return cursor.fetchone()[0]
 
     def get_channel_id(self, username: str) -> int | None:
         """Получить ID канала по username"""
-        username = username.lstrip("@")
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT id FROM channels WHERE username = ?", (username,))
-        row = cursor.fetchone()
-        return row[0] if row else None
+        with self._lock:  # Sprint 6.2: Thread-safe доступ
+            username = username.lstrip("@")
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT id FROM channels WHERE username = ?", (username,))
+            row = cursor.fetchone()
+            return row[0] if row else None
 
     def get_active_channels(self) -> list[dict]:
         """Получить список активных каналов"""
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM channels WHERE is_active = 1")
-        return [dict(row) for row in cursor.fetchall()]
+        with self._lock:  # Sprint 6.2: Thread-safe доступ
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM channels WHERE is_active = 1")
+            return [dict(row) for row in cursor.fetchall()]
 
     # ====== РАБОТА С СООБЩЕНИЯМИ ======
 
@@ -241,22 +244,23 @@ class Database:
         Returns:
             ID записи или None если уже существует
         """
-        cursor = self.conn.cursor()
+        with self._lock:  # Sprint 6.2: Thread-safe доступ
+            cursor = self.conn.cursor()
 
-        try:
-            cursor.execute(
-                """
-                INSERT INTO raw_messages
-                (channel_id, message_id, text, date, has_media)
-                VALUES (?, ?, ?, ?, ?)
-            """,
-                (channel_id, message_id, text, date, has_media),
-            )
-            self.conn.commit()
-            return cursor.lastrowid
-        except sqlite3.IntegrityError:
-            # Сообщение уже существует
-            return None
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO raw_messages
+                    (channel_id, message_id, text, date, has_media)
+                    VALUES (?, ?, ?, ?, ?)
+                """,
+                    (channel_id, message_id, text, date, has_media),
+                )
+                self.conn.commit()
+                return cursor.lastrowid
+            except sqlite3.IntegrityError:
+                # Сообщение уже существует
+                return None
 
     def get_unprocessed_messages(self, hours: int = 24) -> list[dict]:
         """
@@ -268,22 +272,23 @@ class Database:
         Returns:
             Список сообщений
         """
-        cursor = self.conn.cursor()
-        cutoff_time = now_msk() - timedelta(hours=hours)
+        with self._lock:  # Sprint 6.2: Thread-safe доступ
+            cursor = self.conn.cursor()
+            cutoff_time = now_msk() - timedelta(hours=hours)
 
-        cursor.execute(
-            """
-            SELECT m.*, c.username as channel_username
-            FROM raw_messages m
-            JOIN channels c ON m.channel_id = c.id
-            WHERE m.processed = 0
-              AND m.date > ?
-            ORDER BY m.date DESC
-        """,
-            (cutoff_time,),
-        )
+            cursor.execute(
+                """
+                SELECT m.*, c.username as channel_username
+                FROM raw_messages m
+                JOIN channels c ON m.channel_id = c.id
+                WHERE m.processed = 0
+                  AND m.date > ?
+                ORDER BY m.date DESC
+            """,
+                (cutoff_time,),
+            )
 
-        return [dict(row) for row in cursor.fetchall()]
+            return [dict(row) for row in cursor.fetchall()]
 
     @retry_on_locked
     def mark_as_processed(
@@ -302,19 +307,77 @@ class Database:
             gemini_score: Оценка Gemini (для публикаций)
             rejection_reason: Причина отклонения (если не опубликовано)
         """
-        cursor = self.conn.cursor()
-        cursor.execute(
-            """
-            UPDATE raw_messages
-            SET processed = 1,
-                is_duplicate = ?,
-                gemini_score = ?,
-                rejection_reason = ?
-            WHERE id = ?
-        """,
-            (is_duplicate, gemini_score, rejection_reason, message_id),
-        )
-        self.conn.commit()
+        with self._lock:  # Sprint 6.2: Thread-safe доступ
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                UPDATE raw_messages
+                SET processed = 1,
+                    is_duplicate = ?,
+                    gemini_score = ?,
+                    rejection_reason = ?
+                WHERE id = ?
+            """,
+                (is_duplicate, gemini_score, rejection_reason, message_id),
+            )
+            self.conn.commit()
+
+    @retry_on_locked
+    def mark_as_processed_batch(self, updates: list[dict]):
+        """
+        Батч-пометка сообщений как обработанные за одну транзакцию (Sprint 6.1)
+
+        Оптимизация: вместо N коммитов делаем 1 коммит на весь батч.
+        Решает проблему избыточных транзакций SQLite.
+
+        Args:
+            updates: Список словарей с полями:
+                - message_id: int (обязательно)
+                - is_duplicate: bool (по умолчанию False)
+                - gemini_score: int | None (по умолчанию None)
+                - rejection_reason: str | None (по умолчанию None)
+
+        Example:
+            updates = [
+                {'message_id': 1, 'rejection_reason': 'spam'},
+                {'message_id': 2, 'is_duplicate': True},
+                {'message_id': 3, 'gemini_score': 8},
+            ]
+            db.mark_as_processed_batch(updates)
+        """
+        if not updates:
+            return
+
+        with self._lock:  # Sprint 6.2: Thread-safe доступ
+            cursor = self.conn.cursor()
+
+            # Подготавливаем данные для executemany
+            # Порядок: (is_duplicate, gemini_score, rejection_reason, message_id)
+            batch_data = [
+                (
+                    update.get('is_duplicate', False),
+                    update.get('gemini_score'),
+                    update.get('rejection_reason'),
+                    update['message_id']  # message_id обязателен
+                )
+                for update in updates
+            ]
+
+            cursor.executemany(
+                """
+                UPDATE raw_messages
+                SET processed = 1,
+                    is_duplicate = ?,
+                    gemini_score = ?,
+                    rejection_reason = ?
+                WHERE id = ?
+            """,
+                batch_data
+            )
+
+            # ОДИН commit на весь батч!
+            self.conn.commit()
+            logger.debug(f"Batch processed {len(updates)} messages")
 
     # ====== РАБОТА С ОПУБЛИКОВАННЫМИ ПОСТАМИ ======
 
@@ -334,22 +397,23 @@ class Database:
         Returns:
             ID записи
         """
-        cursor = self.conn.cursor()
-        # Сериализуем embedding в bytes через numpy (безопасно, без pickle)
-        buffer = io.BytesIO()
-        np.save(buffer, embedding, allow_pickle=False)
-        embedding_bytes = buffer.getvalue()
+        with self._lock:  # Sprint 6.2: Thread-safe доступ
+            cursor = self.conn.cursor()
+            # Сериализуем embedding в bytes через numpy (безопасно, без pickle)
+            buffer = io.BytesIO()
+            np.save(buffer, embedding, allow_pickle=False)
+            embedding_bytes = buffer.getvalue()
 
-        cursor.execute(
-            """
-            INSERT INTO published
-            (text, embedding, source_message_id, source_channel_id)
-            VALUES (?, ?, ?, ?)
-        """,
-            (text, embedding_bytes, source_message_id, source_channel_id),
-        )
-        self.conn.commit()
-        return cursor.lastrowid
+            cursor.execute(
+                """
+                INSERT INTO published
+                (text, embedding, source_message_id, source_channel_id)
+                VALUES (?, ?, ?, ?)
+            """,
+                (text, embedding_bytes, source_message_id, source_channel_id),
+            )
+            self.conn.commit()
+            return cursor.lastrowid
 
     def get_published_embeddings(self, days: int = 60) -> list[tuple[int, np.ndarray]]:
         """
@@ -361,25 +425,26 @@ class Database:
         Returns:
             Список (id, embedding)
         """
-        cursor = self.conn.cursor()
-        cutoff_time = now_msk() - timedelta(days=days)
+        with self._lock:  # Sprint 6.2: Thread-safe доступ
+            cursor = self.conn.cursor()
+            cutoff_time = now_msk() - timedelta(days=days)
 
-        cursor.execute(
-            """
-            SELECT id, embedding FROM published
-            WHERE published_at > ? AND embedding IS NOT NULL
-        """,
-            (cutoff_time,),
-        )
+            cursor.execute(
+                """
+                SELECT id, embedding FROM published
+                WHERE published_at > ? AND embedding IS NOT NULL
+            """,
+                (cutoff_time,),
+            )
 
-        results = []
-        for row in cursor.fetchall():
-            # Десериализуем через numpy (безопасно, без pickle)
-            buffer = io.BytesIO(row[1])
-            embedding = np.load(buffer, allow_pickle=False)
-            results.append((row[0], embedding))
+            results = []
+            for row in cursor.fetchall():
+                # Десериализуем через numpy (безопасно, без pickle)
+                buffer = io.BytesIO(row[1])
+                embedding = np.load(buffer, allow_pickle=False)
+                results.append((row[0], embedding))
 
-        return results
+            return results
 
     def check_duplicate(self, embedding: np.ndarray, threshold: float = 0.85) -> bool:
         """
@@ -392,6 +457,7 @@ class Database:
         Returns:
             True если найден дубликат
         """
+        # Блокировка внутри get_published_embeddings
         published_embeddings = self.get_published_embeddings(days=60)
 
         if not published_embeddings:
@@ -429,50 +495,52 @@ class Database:
             raw_days: Удалить raw_messages старше N дней
             published_days: Удалить published старше N дней
         """
-        cursor = self.conn.cursor()
+        with self._lock:  # Sprint 6.2: Thread-safe доступ
+            cursor = self.conn.cursor()
 
-        raw_cutoff = now_msk() - timedelta(days=raw_days)
-        published_cutoff = now_msk() - timedelta(days=published_days)
+            raw_cutoff = now_msk() - timedelta(days=raw_days)
+            published_cutoff = now_msk() - timedelta(days=published_days)
 
-        # Удаляем старые сырые сообщения
-        cursor.execute("DELETE FROM raw_messages WHERE date < ?", (raw_cutoff,))
-        raw_deleted = cursor.rowcount
+            # Удаляем старые сырые сообщения
+            cursor.execute("DELETE FROM raw_messages WHERE date < ?", (raw_cutoff,))
+            raw_deleted = cursor.rowcount
 
-        # Удаляем старые опубликованные посты
-        cursor.execute("DELETE FROM published WHERE published_at < ?", (published_cutoff,))
-        published_deleted = cursor.rowcount
+            # Удаляем старые опубликованные посты
+            cursor.execute("DELETE FROM published WHERE published_at < ?", (published_cutoff,))
+            published_deleted = cursor.rowcount
 
-        # Коммитим транзакцию перед VACUUM
-        self.conn.commit()
+            # Коммитим транзакцию перед VACUUM
+            self.conn.commit()
 
-        # VACUUM для сжатия БД (должен быть вне транзакции)
-        cursor.execute("VACUUM")
-        logger.info(
-            f"Очистка БД: удалено {raw_deleted} сырых сообщений, "
-            f"{published_deleted} опубликованных постов"
-        )
+            # VACUUM для сжатия БД (должен быть вне транзакции)
+            cursor.execute("VACUUM")
+            logger.info(
+                f"Очистка БД: удалено {raw_deleted} сырых сообщений, "
+                f"{published_deleted} опубликованных постов"
+            )
 
-        return {"raw": raw_deleted, "published": published_deleted}
+            return {"raw": raw_deleted, "published": published_deleted}
 
     def get_stats(self) -> dict:
         """Получить статистику по базе"""
-        cursor = self.conn.cursor()
+        with self._lock:  # Sprint 6.2: Thread-safe доступ
+            cursor = self.conn.cursor()
 
-        stats = {}
+            stats = {}
 
-        cursor.execute("SELECT COUNT(*) FROM channels WHERE is_active = 1")
-        stats["active_channels"] = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM channels WHERE is_active = 1")
+            stats["active_channels"] = cursor.fetchone()[0]
 
-        cursor.execute("SELECT COUNT(*) FROM raw_messages WHERE processed = 0")
-        stats["unprocessed_messages"] = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM raw_messages WHERE processed = 0")
+            stats["unprocessed_messages"] = cursor.fetchone()[0]
 
-        cursor.execute("SELECT COUNT(*) FROM raw_messages")
-        stats["total_messages"] = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM raw_messages")
+            stats["total_messages"] = cursor.fetchone()[0]
 
-        cursor.execute("SELECT COUNT(*) FROM published")
-        stats["total_published"] = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM published")
+            stats["total_published"] = cursor.fetchone()[0]
 
-        return stats
+            return stats
 
     def get_today_stats(self, timezone_name: str | None = None) -> dict:
         """
@@ -485,76 +553,85 @@ class Database:
         Returns:
             dict со статистикой
         """
-        cursor = self.conn.cursor()
-        stats = {}
+        with self._lock:  # Sprint 6.2: Thread-safe доступ
+            cursor = self.conn.cursor()
+            stats = {}
 
-        # Определяем границы "сегодня" в нужной timezone
-        if timezone_name:
-            tz = get_timezone(timezone_name)
-            now = now_in_timezone(tz)
-            # Начало дня в локальной timezone
-            start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            # Конец дня в локальной timezone
-            end_of_day = start_of_day + timedelta(days=1)
-            # Конвертируем в UTC для запросов к БД
-            start_utc = to_utc(start_of_day)
-            end_utc = to_utc(end_of_day)
-        else:
-            # Fallback: используем UTC
-            from datetime import UTC
+            # Определяем границы "сегодня" в нужной timezone
+            if timezone_name:
+                tz = get_timezone(timezone_name)
+                now = now_in_timezone(tz)
+                # Начало дня в локальной timezone
+                start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                # Конец дня в локальной timezone
+                end_of_day = start_of_day + timedelta(days=1)
+                # Конвертируем в UTC для запросов к БД
+                start_utc = to_utc(start_of_day)
+                end_utc = to_utc(end_of_day)
+            else:
+                # Fallback: используем UTC
+                from datetime import UTC
 
-            now_utc = datetime.now(UTC)
-            start_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-            end_utc = start_utc + timedelta(days=1)
+                now_utc = datetime.now(UTC)
+                start_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+                end_utc = start_utc + timedelta(days=1)
 
-        # Форматируем для SQL (SQLite хранит timestamps как строки или числа)
-        start_str = start_utc.strftime("%Y-%m-%d %H:%M:%S")
-        end_str = end_utc.strftime("%Y-%m-%d %H:%M:%S")
+            # Форматируем для SQL (SQLite хранит timestamps как строки или числа)
+            start_str = start_utc.strftime("%Y-%m-%d %H:%M:%S")
+            end_str = end_utc.strftime("%Y-%m-%d %H:%M:%S")
 
-        # Сообщения, собранные сегодня
-        cursor.execute(
+            # Сообщения, собранные сегодня
+            cursor.execute(
+                """
+                SELECT COUNT(*) FROM raw_messages
+                WHERE date >= ? AND date < ?
+            """,
+                (start_str, end_str),
+            )
+            stats["messages_today"] = cursor.fetchone()[0]
+
+            # Обработанные сегодня (created_at - когда добавлено в БД, дата обработки)
+            cursor.execute(
+                """
+                SELECT COUNT(*) FROM raw_messages
+                WHERE created_at >= ? AND created_at < ? AND processed = 1
+            """,
+                (start_str, end_str),
+            )
+            stats["processed_today"] = cursor.fetchone()[0]
+
+            # Необработанные
+            cursor.execute(
+                """
+                SELECT COUNT(*) FROM raw_messages
+                WHERE processed = 0
             """
-            SELECT COUNT(*) FROM raw_messages
-            WHERE date >= ? AND date < ?
-        """,
-            (start_str, end_str),
-        )
-        stats["messages_today"] = cursor.fetchone()[0]
+            )
+            stats["unprocessed"] = cursor.fetchone()[0]
 
-        # Обработанные сегодня (created_at - когда добавлено в БД, дата обработки)
-        cursor.execute(
-            """
-            SELECT COUNT(*) FROM raw_messages
-            WHERE created_at >= ? AND created_at < ? AND processed = 1
-        """,
-            (start_str, end_str),
-        )
-        stats["processed_today"] = cursor.fetchone()[0]
+            # Опубликованные сегодня
+            cursor.execute(
+                """
+                SELECT COUNT(*) FROM published
+                WHERE published_at >= ? AND published_at < ?
+            """,
+                (start_str, end_str),
+            )
+            stats["published_today"] = cursor.fetchone()[0]
 
-        # Необработанные
-        cursor.execute(
-            """
-            SELECT COUNT(*) FROM raw_messages
-            WHERE processed = 0
-        """
-        )
-        stats["unprocessed"] = cursor.fetchone()[0]
+            # Активные каналы
+            cursor.execute("SELECT COUNT(*) FROM channels WHERE is_active = 1")
+            stats["active_channels"] = cursor.fetchone()[0]
 
-        # Опубликованные сегодня
-        cursor.execute(
-            """
-            SELECT COUNT(*) FROM published
-            WHERE published_at >= ? AND published_at < ?
-        """,
-            (start_str, end_str),
-        )
-        stats["published_today"] = cursor.fetchone()[0]
+            # Всего сообщений
+            cursor.execute("SELECT COUNT(*) FROM raw_messages")
+            stats["total_messages"] = cursor.fetchone()[0]
 
-        # Активные каналы
-        cursor.execute("SELECT COUNT(*) FROM channels WHERE is_active = 1")
-        stats["active_channels"] = cursor.fetchone()[0]
+            # Всего опубликованных
+            cursor.execute("SELECT COUNT(*) FROM published")
+            stats["total_published"] = cursor.fetchone()[0]
 
-        return stats
+            return stats
 
     def close(self):
         """Закрыть соединение с БД (idempotent, thread-safe)"""
