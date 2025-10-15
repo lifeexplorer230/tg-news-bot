@@ -51,6 +51,26 @@ class CategoryNews(BaseModel):
     general: list[NewsItem] = Field(default_factory=list)
 
 
+class DynamicCategoryNews(BaseModel):
+    """Pydantic-модель для валидации новостей с динамическими категориями (QA-1)."""
+
+    model_config = ConfigDict(extra="allow")  # Разрешаем любые категории
+
+    def __init__(self, **data):
+        """Инициализация с валидацией каждой категории как списка NewsItem."""
+        # Валидируем каждую категорию как список NewsItem
+        validated_data = {}
+        for category_name, items in data.items():
+            if isinstance(items, list):
+                validated_data[category_name] = [
+                    item if isinstance(item, NewsItem) else NewsItem(**item)
+                    for item in items
+                ]
+            else:
+                validated_data[category_name] = []
+        super().__init__(**validated_data)
+
+
 logger = setup_logger(__name__)
 
 _GEMINI_LOCK = threading.Lock()
@@ -188,6 +208,36 @@ DEFAULT_SELECT_THREE_CATEGORIES_PROMPT = """Ты — редактор сводн
 }}
 
 Новость может быть только в одной категории. Заголовок 5-7 слов, описание 2-3 предложения с фактами. Верни ТОЛЬКО JSON."""
+
+
+DEFAULT_SELECT_DYNAMIC_CATEGORIES_PROMPT = """Ты — редактор новостного дайджеста. Разложи новости по категориям:
+
+{categories_description}
+
+ПРАВИЛА ОТБОРА:
+- ВЫСОКИЙ ПРИОРИТЕТ (9-10): важные обновления, правила, официальные заявления, значимые цифры
+- СРЕДНИЙ (7-8): аналитика, кейсы с данными, полезные инсайты
+- НИЗКИЙ (5-6): инструкции, советы, второстепенные новости
+
+ИСКЛЮЧИ: рекламу, промо-посты, мемы, off-topic
+
+СООБЩЕНИЯ:
+
+{messages_block}
+
+Верни JSON-объект с категориями. Каждая новость должна содержать:
+- id: номер сообщения (целое число)
+- title: заголовок 5-7 слов
+- description: описание 2-3 предложения с фактами
+- score: оценка важности 1-10
+- reason: почему отобрана (опционально)
+
+Формат JSON:
+{{
+{json_structure}
+}}
+
+Новость может быть только в одной категории. Верни ТОЛЬКО JSON без дополнительного текста."""
 
 
 DEFAULT_FORMAT_NEWS_POST_PROMPT = """Сформируй структурированное описание новости для продавцов маркетплейсов.
@@ -919,6 +969,133 @@ class GeminiClient:
             logger.error(f"Ошибка при отборе новостей (3 категории, chunk): {e}")
             return {"wildberries": [], "ozon": [], "general": []}
 
+    def _process_dynamic_categories_chunk(
+        self,
+        messages: list[dict],
+        category_counts: dict[str, int],
+    ) -> dict[str, list[dict]]:
+        """
+        Обработать один чанк сообщений для динамических категорий (QA-1)
+
+        Args:
+            messages: Чанк сообщений
+            category_counts: Словарь {категория: количество}
+
+        Returns:
+            Dict с категориями из category_counts
+        """
+        # CR-C6: Генерация request_id для трассировки
+        request_id = self._generate_request_id()
+
+        messages_block = self._build_messages_block(messages)
+
+        # Формируем описание категорий для промпта
+        categories_description = []
+        json_structure_lines = []
+
+        for idx, (cat_name, count) in enumerate(category_counts.items(), 1):
+            emoji = ["📦", "🔔", "📊", "🎮", "🎬", "🪙", "🤖", "💻"][idx % 8]
+            categories_description.append(
+                f"{emoji} {cat_name.upper()} ({count}) — новости категории '{cat_name}'"
+            )
+            json_structure_lines.append(
+                f'  "{cat_name}": [{{"id": ..., "title": "...", "description": "...", "score": ..., "reason": "..."}}]'
+            )
+
+        categories_desc_text = "\n".join(categories_description)
+        json_structure_text = ",\n".join(json_structure_lines)
+
+        prompt = self._render_prompt(
+            "select_dynamic_categories",
+            DEFAULT_SELECT_DYNAMIC_CATEGORIES_PROMPT,
+            categories_description=categories_desc_text,
+            messages_block=messages_block,
+            json_structure=json_structure_text,
+        )
+
+        # CR-C6: Валидация размера промпта
+        method_name = "select_dynamic_categories[chunk]"
+        self._validate_prompt_size(prompt, max_tokens=30000, method_name=method_name)
+
+        try:
+            start_time = time.time()
+            model = self._ensure_model()
+            response = model.generate_content(prompt)
+            result_text = response.text.strip()
+            duration = time.time() - start_time
+
+            # CR-C6: Детальное логирование с request_id
+            self._log_api_call(method_name, prompt, result_text, duration, request_id)
+
+            # Удаляем markdown разметку
+            if result_text.startswith("```"):
+                result_text = result_text.split("```")[1]
+                if result_text.startswith("json"):
+                    result_text = result_text[4:]
+                result_text = result_text.strip()
+
+            # Пытаемся найти JSON объект
+            if not result_text.startswith("{"):
+                json_match = re.search(r"\{[\s\S]*\}", result_text)
+                if json_match:
+                    result_text = json_match.group(0)
+                else:
+                    logger.error(f"Не удалось найти JSON в ответе Gemini: {result_text}")
+                    return {cat: [] for cat in category_counts.keys()}
+
+            categories = json.loads(result_text)
+
+            # QA-1: Валидация с DynamicCategoryNews
+            try:
+                validated_categories = DynamicCategoryNews(**categories)
+                # Конвертируем обратно в dict, сохраняя только нужные категории
+                categories = {
+                    cat: getattr(validated_categories, cat, [])
+                    for cat in category_counts.keys()
+                }
+                # Конвертируем NewsItem объекты обратно в dict
+                categories = {
+                    cat: [item.model_dump() if isinstance(item, NewsItem) else item
+                          for item in items]
+                    for cat, items in categories.items()
+                }
+            except ValidationError as e:
+                logger.error(f"Ошибка валидации JSON от Gemini (dynamic categories, chunk): {e}")
+                return {cat: [] for cat in category_counts.keys()}
+
+            # Добавляем дополнительные поля к каждой новости
+            messages_dict = {msg["id"]: msg for msg in messages}
+
+            for category_name in category_counts.keys():
+                if category_name not in categories:
+                    categories[category_name] = []
+
+                for item in categories[category_name]:
+                    msg_id = item["id"]
+                    if msg_id in messages_dict:
+                        msg = messages_dict[msg_id]
+                        item["source_link"] = (
+                            f"https://t.me/{msg['channel_username']}/{msg.get('message_id', '')}"
+                        )
+                        item["source_message_id"] = msg_id
+                        item["source_channel_id"] = msg["channel_id"]
+                        item["text"] = msg["text"]
+                        item["category"] = category_name
+
+            # Логирование результатов
+            counts_str = ", ".join([f"{cat}={len(items)}" for cat, items in categories.items()])
+            logger.debug(
+                f"Chunk: отобрано {counts_str} из {len(messages)} сообщений"
+            )
+            return categories
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Ошибка парсинга JSON от Gemini (dynamic categories, chunk): {e}")
+            return {cat: [] for cat in category_counts.keys()}
+        except Exception as e:
+            logger.error(f"Ошибка при отборе новостей (dynamic categories, chunk): {e}")
+            return {cat: [] for cat in category_counts.keys()}
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -953,7 +1130,6 @@ class GeminiClient:
 
         # Используем старый метод для обратной совместимости
         # (для marketplace use case с 3 категориями)
-        # TODO: В будущем создать полностью универсальный промпт
         if set(category_counts.keys()) == {"wildberries", "ozon", "general"}:
             return self.select_three_categories(
                 messages,
@@ -963,16 +1139,47 @@ class GeminiClient:
                 chunk_size=chunk_size,
             )
 
-        # Для других категорий - возвращаем всё в первую категорию
-        # (временное решение до создания универсального промпта)
-        logger.warning(
-            f"select_by_categories: Категории {list(category_counts.keys())} не поддерживаются "
-            f"универсальным промптом. Используйте 'wildberries', 'ozon', 'general' "
-            f"или создайте custom промпт."
+        # QA-1: Для других категорий используем универсальный промпт с chunking
+        logger.info(
+            f"Используем универсальный промпт для категорий: {list(category_counts.keys())}"
         )
-        first_category = list(category_counts.keys())[0]
-        return {cat: ([] if cat != first_category else messages[:category_counts[cat]])
-                for cat in category_counts.keys()}
+
+        # CR-C6: Chunking для больших списков сообщений
+        if len(messages) <= chunk_size:
+            # Малый список: обрабатываем за один запрос
+            logger.info(
+                f"Обработка {len(messages)} сообщений для категорий {list(category_counts.keys())} (один запрос)"
+            )
+            return self._process_dynamic_categories_chunk(messages, category_counts)
+
+        # Большой список: разбиваем на чанки
+        chunks = self._chunk_list(messages, chunk_size)
+        logger.info(
+            f"CR-C6: Разбиваем {len(messages)} сообщений на {len(chunks)} чанков по {chunk_size} "
+            f"для категорий {list(category_counts.keys())}"
+        )
+
+        # Собираем результаты из всех чанков
+        all_categories = {cat: [] for cat in category_counts.keys()}
+
+        for i, chunk in enumerate(chunks, 1):
+            logger.debug(f"Обработка чанка {i}/{len(chunks)} ({len(chunk)} сообщений)")
+            chunk_results = self._process_dynamic_categories_chunk(chunk, category_counts)
+
+            # Объединяем результаты по категориям
+            for category_name in category_counts.keys():
+                all_categories[category_name].extend(chunk_results.get(category_name, []))
+
+        # Сортируем каждую категорию по score и берём нужное количество
+        final_categories = {}
+        for category_name, target_count in category_counts.items():
+            all_categories[category_name].sort(key=lambda x: x.get("score", 0), reverse=True)
+            final_categories[category_name] = all_categories[category_name][:target_count]
+
+        counts_str = ", ".join([f"{cat}={len(items)}" for cat, items in final_categories.items()])
+        logger.info(f"CR-C6: Gemini отобрал топовые новости: {counts_str} из {len(messages)} сообщений")
+
+        return final_categories
 
     @retry(
         stop=stop_after_attempt(3),
