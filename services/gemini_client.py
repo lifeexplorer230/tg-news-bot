@@ -1150,7 +1150,29 @@ class GeminiClient:
             logger.info(
                 f"Обработка {len(messages)} сообщений для категорий {list(category_counts.keys())} (один запрос)"
             )
-            return self._process_dynamic_categories_chunk(messages, category_counts)
+            all_categories = self._process_dynamic_categories_chunk(messages, category_counts)
+
+            # Применяем глобальную сортировку по score
+            all_news = []
+            for category_name, news_list in all_categories.items():
+                for news in news_list:
+                    news['category'] = category_name
+                    all_news.append(news)
+
+            all_news.sort(key=lambda x: x.get("score", 0), reverse=True)
+            total_target = sum(category_counts.values())
+            top_news = all_news[:total_target]
+
+            final_categories = {cat: [] for cat in category_counts.keys()}
+            for news in top_news:
+                category = news.get('category')
+                if category and category in final_categories:
+                    final_categories[category].append(news)
+
+            counts_str = ", ".join([f"{cat}={len(items)}" for cat, items in final_categories.items()])
+            logger.info(f"Отобрал топовые новости (по score): {counts_str} (топ-{total_target})")
+
+            return final_categories
 
         # Большой список: разбиваем на чанки
         chunks = self._chunk_list(messages, chunk_size)
@@ -1170,14 +1192,31 @@ class GeminiClient:
             for category_name in category_counts.keys():
                 all_categories[category_name].extend(chunk_results.get(category_name, []))
 
-        # Сортируем каждую категорию по score и берём нужное количество
-        final_categories = {}
-        for category_name, target_count in category_counts.items():
-            all_categories[category_name].sort(key=lambda x: x.get("score", 0), reverse=True)
-            final_categories[category_name] = all_categories[category_name][:target_count]
+        # НОВАЯ ЛОГИКА: Глобальная сортировка по score (приоритет > категории)
+        # Объединяем все новости из всех категорий
+        all_news = []
+        for category_name, news_list in all_categories.items():
+            for news in news_list:
+                # Добавляем категорию в новость для последующей группировки
+                news['category'] = category_name
+                all_news.append(news)
+
+        # Сортируем глобально по score от большего к меньшему
+        all_news.sort(key=lambda x: x.get("score", 0), reverse=True)
+
+        # Берём топ N (сумма всех category_counts)
+        total_target = sum(category_counts.values())
+        top_news = all_news[:total_target]
+
+        # Группируем обратно по категориям для совместимости с форматом вывода
+        final_categories = {cat: [] for cat in category_counts.keys()}
+        for news in top_news:
+            category = news.get('category')
+            if category and category in final_categories:
+                final_categories[category].append(news)
 
         counts_str = ", ".join([f"{cat}={len(items)}" for cat, items in final_categories.items()])
-        logger.info(f"CR-C6: Gemini отобрал топовые новости: {counts_str} из {len(messages)} сообщений")
+        logger.info(f"CR-C6: Gemini отобрал топовые новости (по score): {counts_str} из {len(messages)} сообщений (топ-{total_target})")
 
         return final_categories
 

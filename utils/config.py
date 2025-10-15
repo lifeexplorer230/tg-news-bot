@@ -118,6 +118,26 @@ class Config:
             error_lines.append("\nПроверьте config/base.yaml и профильный конфиг.")
             raise ValueError("\n".join(error_lines)) from e
 
+    def _get_env_with_profile(self, key: str, default: str = "") -> str:
+        """
+        Получить переменную окружения с учётом профиля.
+        Сначала ищет {PROFILE_UPPER}_{KEY}, потом {KEY}
+
+        Например, для профиля 'ai' и ключа 'TELEGRAM_PHONE':
+        1. Ищет AI_TELEGRAM_PHONE
+        2. Ищет TELEGRAM_PHONE
+        3. Возвращает default
+
+        Args:
+            key: Имя переменной окружения
+            default: Значение по умолчанию
+
+        Returns:
+            Значение переменной окружения
+        """
+        profile_key = f"{self.profile.upper()}_{key}"
+        return os.getenv(profile_key) or os.getenv(key, default)
+
     def _validate_env(self) -> None:
         """
         Валидация env переменных с Pydantic (CR-H4)
@@ -126,14 +146,14 @@ class Config:
             ValueError: Если env переменные невалидны с понятным сообщением
         """
         try:
-            # Собираем все env переменные
+            # Собираем все env переменные с учётом профиля
             env_vars = {
                 "TELEGRAM_API_ID": os.getenv("TELEGRAM_API_ID", "0"),
                 "TELEGRAM_API_HASH": os.getenv("TELEGRAM_API_HASH", ""),
-                "TELEGRAM_PHONE": os.getenv("TELEGRAM_PHONE", ""),
+                "TELEGRAM_PHONE": self._get_env_with_profile("TELEGRAM_PHONE"),
                 "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY", ""),
-                "MY_CHANNEL": os.getenv("MY_CHANNEL", ""),
-                "MY_PERSONAL_ACCOUNT": os.getenv("MY_PERSONAL_ACCOUNT", ""),
+                "MY_CHANNEL": self._get_env_with_profile("MY_CHANNEL"),
+                "MY_PERSONAL_ACCOUNT": self._get_env_with_profile("MY_PERSONAL_ACCOUNT"),
             }
             # Валидируем через Pydantic
             EnvConfig(**env_vars)
@@ -232,12 +252,12 @@ class Config:
         # CR-H4: Валидация env переменных перед загрузкой
         self._validate_env()
 
-        # Загружаем провалидированные значения
+        # Загружаем провалидированные значения с учётом профиля
         self.telegram_api_id = int(os.getenv("TELEGRAM_API_ID", "0"))
         self.telegram_api_hash = os.getenv("TELEGRAM_API_HASH", "")
-        self.telegram_phone = os.getenv("TELEGRAM_PHONE", "")
-        self.my_channel = os.getenv("MY_CHANNEL", "")
-        self.my_personal_account = os.getenv("MY_PERSONAL_ACCOUNT", "")
+        self.telegram_phone = self._get_env_with_profile("TELEGRAM_PHONE")
+        self.my_channel = self._get_env_with_profile("MY_CHANNEL")
+        self.my_personal_account = self._get_env_with_profile("MY_PERSONAL_ACCOUNT")
         self.gemini_api_key = os.getenv("GEMINI_API_KEY", "")
 
     # ------------------------------------------------------------------

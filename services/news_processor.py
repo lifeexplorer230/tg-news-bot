@@ -261,14 +261,6 @@ class NewsProcessor:
         ]
         await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
 
-        # Помечаем сообщения как обработанные
-        # Sprint 6.4: Батч-обработка вместо N вызовов
-        updates = [
-            {'message_id': post["source_message_id"], 'gemini_score': post.get("score")}
-            for post in formatted_posts
-        ]
-        await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
-
         # ШАГ 5: Модерация (если включена)
         if self.moderation_enabled:
             approved_posts = await self.moderate_posts(client, formatted_posts, marketplace)
@@ -279,7 +271,31 @@ class NewsProcessor:
         else:
             approved_posts = formatted_posts
 
-        # ШАГ 6: Публикация
+        # ШАГ 6: 2-стадийная модерация и публикация
+        # СТАДИЯ 2: Формируем дайджест и отправляем на утверждение
+        digest_text = self._format_digest(approved_posts, mp_config.target_channel)
+        moderator_username = self.config.my_personal_account
+
+        # Ждем утверждения от модератора
+        is_approved = await self._approve_digest(client, moderator_username, digest_text)
+
+        if not is_approved:
+            logger.warning(f"❌ Модератор отменил публикацию дайджеста {marketplace}")
+            # Помечаем все отфильтрованные сообщения как rejected
+            updates = [
+                {
+                    'message_id': msg_id,
+                    'is_duplicate': (reason == "is_duplicate"),
+                    'rejection_reason': reason
+                }
+                for msg_id, reason in all_rejected.items()
+            ]
+            await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
+            return
+
+        # ПУБЛИКАЦИЯ: Дайджест утвержден
+        logger.info(f"📢 Публикация утвержденного дайджеста {marketplace}...")
+
         await self.publish_digest(
             client,
             approved_posts,
@@ -288,8 +304,10 @@ class NewsProcessor:
             display_name=mp_config.display_name or marketplace,
         )
 
+        # Помечаем сообщения как обработанные
+        await self._mark_messages_processed(approved_posts)
+
         # ШАГ 7: Помечаем все отфильтрованные сообщения как processed
-        # (которые не были помечены ранее)
         # Sprint 6.4: Батч-обработка вместо N вызовов
         updates = [
             {
@@ -501,7 +519,7 @@ class NewsProcessor:
         logger.info("=" * 80)
 
         # Sprint 6.3: Неблокирующий доступ к БД
-        base_messages = await asyncio.to_thread(self.db.get_unprocessed_messages, hours=24)
+        base_messages = await asyncio.to_thread(self.db.get_unprocessed_messages, hours=48)
         logger.info(f"Загружено {len(base_messages)} необработанных сообщений")
 
         if not base_messages:
@@ -631,15 +649,7 @@ class NewsProcessor:
         ]
         await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
 
-        # Помечаем сообщения как обработанные
-        # Sprint 6.4: Батч-обработка вместо N вызовов
-        updates = [
-            {'message_id': post["source_message_id"], 'gemini_score': post.get("score")}
-            for post in approved_posts
-        ]
-        await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
-
-        # ШАГ 6: Публикация в канал
+        # ШАГ 6: 2-стадийная модерация и публикация
         target_channel = (
             self.all_digest_channel
             if self.all_digest_enabled and self.all_digest_channel
@@ -648,6 +658,31 @@ class NewsProcessor:
                 None,
             )
         )
+
+        # СТАДИЯ 2: Формируем дайджест и отправляем на утверждение
+        digest_text = self._format_digest(approved_posts, target_channel)
+        moderator_username = self.config.my_personal_account
+
+        # Ждем утверждения от модератора
+        is_approved = await self._approve_digest(client, moderator_username, digest_text)
+
+        if not is_approved:
+            logger.warning("❌ Модератор отменил публикацию дайджеста")
+            # Помечаем все отфильтрованные сообщения как rejected
+            updates = [
+                {
+                    'message_id': msg_id,
+                    'is_duplicate': (reason == "is_duplicate"),
+                    'rejection_reason': reason
+                }
+                for msg_id, reason in all_rejected.items()
+            ]
+            await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
+            return
+
+        # ПУБЛИКАЦИЯ: Дайджест утвержден
+        logger.info("📢 Публикация утвержденного дайджеста...")
+
         await self.publish_digest(
             client,
             approved_posts,
@@ -655,6 +690,9 @@ class NewsProcessor:
             target_channel,
             display_name="Категории",
         )
+
+        # Помечаем сообщения как обработанные
+        await self._mark_messages_processed(approved_posts)
 
         # ШАГ 7: Помечаем все отфильтрованные сообщения как processed
         # Sprint 6.4: Батч-обработка вместо N вызовов
@@ -734,7 +772,7 @@ class NewsProcessor:
         self, client: TelegramClient, personal_account: str, message: str, total_posts: int
     ) -> list[int] | None:
         """
-        Ожидание ответа модератора (без таймаута)
+        Ожидание ответа модератора через polling
 
         Args:
             client: Telegram клиент
@@ -745,82 +783,262 @@ class NewsProcessor:
         Returns:
             Список номеров для исключения или None если отмена
         """
+        from datetime import datetime, timedelta, timezone
+
         logger.info("⏳ Отправка на модерацию и ожидание ответа...")
 
-        # Используем conversation API для отправки и ожидания ответа
-        async with client.conversation(personal_account) as conv:
+        try:
+            # Отправляем сообщение модерации
+            sent_message = await client.send_message(personal_account, message)
+            sent_time = datetime.now(timezone.utc)
+            logger.info(f"✅ Сообщение отправлено модератору {personal_account}")
+
+            # Ждем ответа с таймаутом (в секундах)
+            timeout_seconds = self.moderation_timeout_hours * 3600
+            logger.info(f"⏰ Ожидание ответа модератора (timeout: {self.moderation_timeout_hours}ч)")
+
+            check_interval = 3  # Проверяем каждые 3 секунды
+            elapsed = 0
+
+            while elapsed < timeout_seconds:
+                await asyncio.sleep(check_interval)
+                elapsed += check_interval
+
+                # Получаем последние сообщения от модератора
+                messages = await client.get_messages(personal_account, limit=10)
+
+                # Ищем первое сообщение после отправки запроса
+                for msg in messages:
+                    if msg.date > sent_time and msg.out == False:  # Входящее сообщение после нашего
+                        response_text = msg.text.strip().lower() if msg.text else ""
+
+                        if not response_text:
+                            continue
+
+                        logger.info(f"📨 Получен ответ модератора: {response_text}")
+
+                        # Обработка команды отмены
+                        if response_text in ["отмена", "cancel"]:
+                            await client.send_message(personal_account, "❌ Модерация отменена")
+                            return None
+
+                        # Обработка команды "опубликовать все"
+                        if response_text in ["0", "все", "all"]:
+                            await client.send_message(
+                                personal_account,
+                                f"✅ Все {total_posts} новостей будут опубликованы"
+                            )
+                            return []
+
+                        # Парсинг номеров
+                        excluded_ids = []
+                        parts = response_text.split()
+
+                        for part in parts:
+                            # Удаляем возможные символы типа запятых
+                            part = part.strip(",.")
+                            if part.isdigit():
+                                num = int(part)
+                                if 1 <= num <= total_posts:
+                                    excluded_ids.append(num)
+                                else:
+                                    logger.warning(f"Номер {num} вне диапазона 1-{total_posts}")
+
+                        if not excluded_ids:
+                            await client.send_message(
+                                personal_account,
+                                "⚠️ Не удалось распознать номера. "
+                                "Отправь номера через пробел (например: 1 2 3 5 6)"
+                            )
+                            continue  # Продолжаем ждать
+
+                        await client.send_message(
+                            personal_account,
+                            f"✅ Исключено {len(excluded_ids)} новостей: {', '.join(map(str, excluded_ids))}\n"
+                            f"Будет опубликовано: {total_posts - len(excluded_ids)} новостей"
+                        )
+                        return excluded_ids
+
+            # Timeout модерации - автоматически публикуем все новости
+            logger.warning(
+                f"⏰ Timeout модерации ({self.moderation_timeout_hours}ч) - "
+                f"автоматическая публикация всех {total_posts} новостей"
+            )
             try:
-                # Отправляем сообщение модерации
-                await conv.send_message(message)
-                logger.info(f"✅ Сообщение отправлено модератору {personal_account}")
-
-                # Ждем ответа с таймаутом (в секундах)
-                timeout_seconds = self.moderation_timeout_hours * 3600
-                logger.info(f"⏰ Ожидание ответа модератора (timeout: {self.moderation_timeout_hours}ч)")
-
-                response = await conv.get_response(timeout=timeout_seconds)
-                response_text = response.message.strip().lower()
-
-                logger.info(f"📨 Получен ответ модератора: {response_text}")
-
-                # Обработка команды отмены
-                if response_text in ["отмена", "cancel"]:
-                    await conv.send_message("❌ Модерация отменена")
-                    return None
-
-                # Обработка команды "опубликовать все"
-                if response_text in ["0", "все", "all"]:
-                    await conv.send_message(f"✅ Все {total_posts} новостей будут опубликованы")
-                    return []
-
-                # Парсинг номеров
-                excluded_ids = []
-                parts = response_text.split()
-
-                for part in parts:
-                    # Удаляем возможные символы типа запятых
-                    part = part.strip(",.")
-                    if part.isdigit():
-                        num = int(part)
-                        if 1 <= num <= total_posts:
-                            excluded_ids.append(num)
-                        else:
-                            logger.warning(f"Номер {num} вне диапазона 1-{total_posts}")
-
-                if not excluded_ids:
-                    await conv.send_message(
-                        "⚠️ Не удалось распознать номера. "
-                        "Отправь номера через пробел (например: 1 2 3 5 6)"
-                    )
-                    # Рекурсивно ждем правильного ответа (без повторной отправки message)
-                    return await self._wait_for_moderation_response_retry(
-                        conv, total_posts
-                    )
-
-                await conv.send_message(
-                    f"✅ Исключено {len(excluded_ids)} новостей: {', '.join(map(str, excluded_ids))}\n"
-                    f"Будет опубликовано: {total_posts - len(excluded_ids)} новостей"
+                await client.send_message(
+                    personal_account,
+                    f"⏰ Время модерации истекло ({self.moderation_timeout_hours}ч)\n"
+                    f"✅ Все {total_posts} новостей будут опубликованы автоматически"
                 )
-                return excluded_ids
+            except Exception:
+                pass  # Игнорируем ошибки отправки уведомления
+            return []  # Пустой список = опубликовать все
 
-            except asyncio.TimeoutError:
-                # Timeout модерации - автоматически публикуем все новости
-                logger.warning(
-                    f"⏰ Timeout модерации ({self.moderation_timeout_hours}ч) - "
-                    f"автоматическая публикация всех {total_posts} новостей"
+        except Exception as e:
+            logger.error(f"Ошибка при ожидании ответа модератора: {e}", exc_info=True)
+            return None
+
+    def _format_digest(self, approved_posts: list[dict], target_channel: str) -> str:
+        """
+        Форматирование финального дайджеста для публикации
+
+        Args:
+            approved_posts: Список одобренных новостей
+            target_channel: Канал для публикации
+
+        Returns:
+            Отформатированный текст дайджеста
+        """
+        from datetime import timedelta
+        from utils.timezone import now_msk
+
+        yesterday = now_msk() - timedelta(days=1)
+        date_str = yesterday.strftime("%d-%m-%Y")
+        header = self.publication_header_template.format(
+            date=date_str,
+            display_name="Категории",
+            marketplace="категории",
+            channel=target_channel,
+            profile=getattr(self.config, "profile", "")
+        )
+
+        digest_parts = [header, ""]
+
+        for idx, post in enumerate(approved_posts, 1):
+            title = post.get("title", "Без заголовка")
+            description = post.get("description", "")
+            source_link = post.get("source_link", "")
+
+            digest_parts.append(f"{idx}. **{title}**")
+            digest_parts.append(f"{description}")
+            if source_link:
+                digest_parts.append(source_link)
+            digest_parts.append("")
+
+        digest_parts.append(self.publication_footer_template)
+        digest_text = "\n".join(digest_parts)
+
+        return digest_text
+
+    async def _approve_digest(
+        self, client: TelegramClient, personal_account: str, digest_text: str
+    ) -> bool:
+        """
+        Вторая стадия модерации: утверждение дайджеста перед публикацией
+
+        Args:
+            client: Telegram клиент
+            personal_account: Username модератора
+            digest_text: Отформатированный текст дайджеста
+
+        Returns:
+            True если одобрено, False если отменено
+        """
+        from datetime import datetime, timedelta, timezone
+
+        logger.info("📋 Отправка дайджеста на утверждение...")
+
+        try:
+            # Формируем сообщение с дайджестом и инструкциями
+            approval_message = f"{digest_text}\n\n"
+            approval_message += "=" * 50 + "\n"
+            approval_message += "**📢 УТВЕРЖДЕНИЕ ДАЙДЖЕСТА**\n\n"
+            approval_message += "Отправь команду для публикации:\n"
+            approval_message += "• `опубликовать` / `ok` / `да` - опубликовать\n"
+            approval_message += "• `отмена` - отменить публикацию\n"
+
+            # Отправляем дайджест на утверждение
+            sent_message = await client.send_message(personal_account, approval_message)
+            sent_time = datetime.now(timezone.utc)
+            logger.info(f"✅ Дайджест отправлен на утверждение модератору {personal_account}")
+
+            # Ждем ответа с таймаутом 1 час
+            timeout_seconds = 3600  # 1 час
+            logger.info(f"⏰ Ожидание утверждения дайджеста (timeout: 1ч)")
+
+            check_interval = 3  # Проверяем каждые 3 секунды
+            elapsed = 0
+
+            while elapsed < timeout_seconds:
+                await asyncio.sleep(check_interval)
+                elapsed += check_interval
+
+                # Получаем последние сообщения от модератора
+                messages = await client.get_messages(personal_account, limit=10)
+
+                # Ищем первое сообщение после отправки запроса
+                for msg in messages:
+                    if msg.date > sent_time and msg.out == False:  # Входящее сообщение
+                        response_text = msg.text.strip().lower() if msg.text else ""
+
+                        if not response_text:
+                            continue
+
+                        logger.info(f"📨 Получен ответ модератора: {response_text}")
+
+                        # Команда отмены
+                        if response_text in ["отмена", "cancel"]:
+                            await client.send_message(personal_account, "❌ Публикация дайджеста отменена")
+                            logger.info("❌ Модератор отменил публикацию")
+                            return False
+
+                        # Команды утверждения
+                        if response_text in ["опубликовать", "ok", "да", "yes"]:
+                            await client.send_message(personal_account, "✅ Дайджест утвержден, публикуем...")
+                            logger.info("✅ Модератор утвердил публикацию")
+                            return True
+
+                        # Неизвестная команда
+                        await client.send_message(
+                            personal_account,
+                            "⚠️ Неизвестная команда. Используй:\n"
+                            "• `опубликовать` / `ok` / `да` - опубликовать\n"
+                            "• `отмена` - отменить"
+                        )
+                        continue
+
+            # Timeout - автоматически утверждаем
+            logger.warning("⏰ Timeout утверждения (1ч) - автоматическая публикация")
+            try:
+                await client.send_message(
+                    personal_account,
+                    "⏰ Время утверждения истекло (1ч)\n"
+                    "✅ Дайджест будет опубликован автоматически"
                 )
-                try:
-                    await conv.send_message(
-                        f"⏰ Время модерации истекло ({self.moderation_timeout_hours}ч)\n"
-                        f"✅ Все {total_posts} новостей будут опубликованы автоматически"
-                    )
-                except Exception:
-                    pass  # Игнорируем ошибки отправки уведомления
-                return []  # Пустой список = опубликовать все
+            except Exception:
+                pass
+            return True  # Автоматически утверждаем при timeout
 
-            except Exception as e:
-                logger.error(f"Ошибка при ожидании ответа модератора: {e}", exc_info=True)
-                return None
+        except Exception as e:
+            logger.error(f"Ошибка при утверждении дайджеста: {e}", exc_info=True)
+            return False
+
+    async def _mark_messages_processed(self, approved_posts: list[dict]) -> None:
+        """
+        Помечает сообщения из одобренных новостей как обработанные в БД
+
+        Args:
+            approved_posts: Список одобренных постов с source_message_id
+        """
+        try:
+            # Формируем батч-апдейты для БД
+            updates = [
+                {
+                    'message_id': post.get("source_message_id"),
+                    'gemini_score': post.get("score")
+                }
+                for post in approved_posts
+                if post.get("source_message_id")
+            ]
+
+            if updates:
+                await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
+                logger.info(f"✅ Помечено {len(updates)} сообщений как обработанные")
+            else:
+                logger.warning("⚠️ Нет сообщений для пометки как обработанные")
+
+        except Exception as e:
+            logger.error(f"Ошибка при пометке сообщений как обработанные: {e}", exc_info=True)
 
     async def moderate_categories(
         self, client: TelegramClient, categories: dict[str, list[dict]]
@@ -836,6 +1054,10 @@ class NewsProcessor:
                 post["category"] = cat_name
                 all_posts.append(post)
 
+        # ВАЖНО: Сортируем по score ПЕРЕД присвоением moderation_id
+        # чтобы номера совпадали с тем, что видит пользователь в сообщении модерации
+        all_posts.sort(key=lambda x: x.get('score', 0), reverse=True)
+
         total = len(all_posts)
         exclude_goal = max(0, min(self.processor_exclude_count, total))
         logger.info(
@@ -844,12 +1066,12 @@ class NewsProcessor:
             exclude_goal,
         )
 
-        # Присваиваем ID для модерации
+        # Присваиваем ID для модерации ПОСЛЕ сортировки
         for idx, post in enumerate(all_posts, 1):
             post["moderation_id"] = idx
 
-        # Формируем сообщение для модерации
-        message = self._format_categories_moderation_message(categories, exclude_goal)
+        # Формируем сообщение для модерации (передаем УЖЕ отсортированный список)
+        message = self._format_categories_moderation_message(all_posts, exclude_goal)
 
         # Отправляем в личку и ждем ответа
         personal_account = self.config.my_personal_account
@@ -871,9 +1093,14 @@ class NewsProcessor:
         return approved_posts
 
     def _format_categories_moderation_message(
-        self, categories: dict[str, list[dict]], exclude_goal: int
+        self, all_posts: list[dict], exclude_goal: int
     ) -> str:
-        """Форматирование сообщения для модерации 3-категорийной системы"""
+        """Форматирование сообщения для модерации 3-категорийной системы
+
+        Args:
+            all_posts: УЖЕ отсортированный список новостей с присвоенными moderation_id
+            exclude_goal: Количество новостей для исключения
+        """
 
         number_emojis = {
             1: "1️⃣",
@@ -893,34 +1120,27 @@ class NewsProcessor:
             15: "1️⃣5️⃣",
         }
 
-        lines = ["📋 **МОДЕРАЦИЯ: ВСЕ КАТЕГОРИИ**"]
+        # Используем УЖЕ отсортированный список (не пересортировываем!)
+
+        lines = ["📋 **МОДЕРАЦИЯ: ТОПОВЫЕ НОВОСТИ**"]
         if exclude_goal > 0:
             lines.append(
-                f"_Нужно исключить {exclude_goal} новостей из {sum(len(v) for v in categories.values())}_\n"
+                f"_Нужно исключить {exclude_goal} новостей из {len(all_posts)}_\n"
             )
         else:
             lines.append("_При необходимости можно исключить новости, отправив их номера_\n")
 
-        idx = 1
-
-        # Динамически форматируем все категории (универсальная система)
-        for category_name, posts in categories.items():
-            if not posts:
-                continue
-
-            # Форматируем имя категории красиво
-            display_name = category_name.upper().replace("_", " ")
-            lines.append(f"📦 **{display_name}**\n")
-
-            for post in posts:
-                emoji = number_emojis.get(idx, f"{idx}.")
-                lines.append(f"{emoji} **{post['title']}**")
-                lines.append(f"_{post['description'][:100]}..._")
-                lines.append(f"⭐ {post.get('score', 0)}/10\n")
-                idx += 1
+        # Выводим все новости единым списком (УЖЕ отсортированы по score)
+        for post in all_posts:
+            mod_id = post.get('moderation_id', 0)
+            emoji = number_emojis.get(mod_id, f"{mod_id}.")
+            category_tag = post.get('category', '').upper()
+            lines.append(f"{emoji} **{post['title']}**")
+            lines.append(f"_{post['description'][:100]}..._")
+            lines.append(f"⭐ {post.get('score', 0)}/10 | 📦 {category_tag}\n")
 
         lines.append("=" * 50)
-        lines.append(f"📊 **Всего:** {idx-1} новостей\n")
+        lines.append(f"📊 **Всего:** {len(all_posts)} новостей\n")
         lines.append("**Инструкция:**")
         if exclude_goal > 0:
             lines.append(
@@ -1087,6 +1307,7 @@ class NewsProcessor:
 
         digest = "\n".join(lines)
 
+        # Публикация дайджеста
         preview_channel = (self.publication_preview_channel or "").strip()
         if preview_channel:
             try:
