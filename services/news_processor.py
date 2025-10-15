@@ -228,7 +228,9 @@ class NewsProcessor:
             return
 
         # ШАГ 4: Отбор и форматирование через Gemini (ОДИН ЗАПРОС!)
-        formatted_posts = self.gemini.select_and_format_marketplace_news(
+        # Sprint 6.5: Неблокирующие LLM вызовы
+        formatted_posts = await asyncio.to_thread(
+            self.gemini.select_and_format_marketplace_news,
             unique_messages,
             marketplace=marketplace,
             top_n=mp_config.top_n,
@@ -555,7 +557,9 @@ class NewsProcessor:
 
         # ШАГ 4: Отбор по категориям через Gemini (динамическая система)
         # Поддерживает любые категории из конфига, не только marketplace-специфичные
-        categories = self.gemini.select_by_categories(
+        # Sprint 6.5: Неблокирующие LLM вызовы
+        categories = await asyncio.to_thread(
+            self.gemini.select_by_categories,
             unique_messages,
             category_counts=self.all_digest_counts,
         )
