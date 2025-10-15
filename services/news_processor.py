@@ -358,12 +358,11 @@ class NewsProcessor:
             self._cached_published_embeddings = await asyncio.to_thread(self.db.get_published_embeddings, days=60)
             logger.debug(f"Загружено {len(self._cached_published_embeddings)} published embeddings в кэш")
 
-        published_embeddings = self._cached_published_embeddings
-
         # QA-4: Строим матрицу embeddings один раз для всех проверок
-        if self._published_embeddings_matrix is None and published_embeddings:
-            self._published_embeddings_ids = [post_id for post_id, _ in published_embeddings]
-            self._published_embeddings_matrix = np.array([emb for _, emb in published_embeddings])
+        # Sprint 6.3.4: используем кэш напрямую, без промежуточной переменной
+        if self._published_embeddings_matrix is None and self._cached_published_embeddings:
+            self._published_embeddings_ids = [post_id for post_id, _ in self._cached_published_embeddings]
+            self._published_embeddings_matrix = np.array([emb for _, emb in self._cached_published_embeddings])
             logger.debug(
                 f"QA-4: Построена матрица embeddings {self._published_embeddings_matrix.shape} "
                 f"для оптимизации дедупликации"
@@ -377,8 +376,9 @@ class NewsProcessor:
         # Проверяем каждое сообщение на дубликаты
         for msg, embedding in zip(messages, embeddings_array):
             # Проверяем на дубликаты (inline вместо db.check_duplicate)
+            # Sprint 6.3.4: удалён неиспользуемый аргумент published_embeddings
             is_duplicate = self._check_duplicate_inline(
-                embedding, published_embeddings, self.duplicate_threshold
+                embedding, self.duplicate_threshold
             )
 
             if is_duplicate:
@@ -427,16 +427,16 @@ class NewsProcessor:
         )
 
     def _check_duplicate_inline(
-        self, embedding: np.ndarray, published_embeddings: list, threshold: float = 0.85
+        self, embedding: np.ndarray, threshold: float = 0.85
     ) -> bool:
         """
         Проверить дубликат inline без обращения к БД (оптимизация CR-H1)
         Оптимизировано (CR-C5): используем batch_cosine_similarity для векторизации
         Оптимизировано (QA-4): переиспользуем кэшированную матрицу вместо пересоздания
+        Рефакторинг (Sprint 6.3.4): удалён неиспользуемый параметр published_embeddings
 
         Args:
             embedding: Embedding для проверки
-            published_embeddings: Список (post_id, published_embedding) - не используется напрямую
             threshold: Порог схожести
 
         Returns:
