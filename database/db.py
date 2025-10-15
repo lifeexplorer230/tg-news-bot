@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from utils.logger import setup_logger
-from utils.timezone import get_timezone, now_in_timezone, now_msk, to_utc
+from utils.timezone import get_timezone, now_in_timezone, now_msk, now_utc, to_utc
 
 logger = setup_logger(__name__)
 
@@ -274,7 +274,8 @@ class Database:
         """
         with self._lock:  # Sprint 6.2: Thread-safe доступ
             cursor = self.conn.cursor()
-            cutoff_time = now_msk() - timedelta(hours=hours)
+            # ИСПРАВЛЕНИЕ: используем UTC для сравнения, т.к. message.date хранится в UTC
+            cutoff_time = now_utc() - timedelta(hours=hours)
 
             cursor.execute(
                 """
@@ -427,7 +428,8 @@ class Database:
         """
         with self._lock:  # Sprint 6.2: Thread-safe доступ
             cursor = self.conn.cursor()
-            cutoff_time = now_msk() - timedelta(days=days)
+            # ИСПРАВЛЕНИЕ: используем UTC, т.к. CURRENT_TIMESTAMP в SQLite = UTC
+            cutoff_time = now_utc() - timedelta(days=days)
 
             cursor.execute(
                 """
@@ -498,8 +500,9 @@ class Database:
         with self._lock:  # Sprint 6.2: Thread-safe доступ
             cursor = self.conn.cursor()
 
-            raw_cutoff = now_msk() - timedelta(days=raw_days)
-            published_cutoff = now_msk() - timedelta(days=published_days)
+            # ИСПРАВЛЕНИЕ: используем UTC для обеих таблиц (даты хранятся в UTC)
+            raw_cutoff = now_utc() - timedelta(days=raw_days)
+            published_cutoff = now_utc() - timedelta(days=published_days)
 
             # Удаляем старые сырые сообщения
             cursor.execute("DELETE FROM raw_messages WHERE date < ?", (raw_cutoff,))
