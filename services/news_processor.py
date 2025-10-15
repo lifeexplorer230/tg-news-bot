@@ -145,181 +145,8 @@ class NewsProcessor:
             )
         return self._gemini_client
 
-    async def process_category(
-        self, marketplace: str, client: TelegramClient, base_messages: list[dict] | None = None
-    ):
-        """
-        Обработка новостей для конкретной категории
-
-        Args:
-            marketplace: Название категории (параметр сохранён для backwards compatibility)
-            client: Telegram client
-            base_messages: Кэшированные сообщения (оптимизация CR-H1). Если None - загружаются из БД
-        """
-
-        if marketplace not in self.categories:
-            logger.error(f"Неизвестная категория: {marketplace}")
-            return
-
-        mp_config = self.categories.get(marketplace)
-        if mp_config is None:
-            logger.error(f"Категория {marketplace} отсутствует в конфигурации")
-            return
-
-        if not mp_config.enabled:
-            logger.info(f"Категория {marketplace} отключена в конфиге")
-            return
-
-        logger.info("=" * 80)
-        logger.info(f"📰 ОБРАБОТКА КАТЕГОРИИ: {marketplace.upper()}")
-        logger.info("=" * 80)
-
-        # ШАГ 1: Загружаем сообщения (из кэша или БД)
-        if base_messages is None:
-            # Sprint 6.3: Неблокирующий доступ к БД
-            base_messages = await asyncio.to_thread(self.db.get_unprocessed_messages, hours=24)
-            logger.info(f"Загружено {len(base_messages)} необработанных сообщений из БД")
-        else:
-            logger.info(f"Используем {len(base_messages)} кэшированных сообщений (CR-H1)")
-
-        if not base_messages:
-            logger.info(f"Нет новых сообщений для {marketplace}")
-            return
-
-        # Словарь для отслеживания причин отклонения
-        all_rejected = {}
-
-        # ШАГ 2: Фильтрация по ключевым словам
-        filtered_messages, rejected_by_keywords = self._filter_by_keywords(
-            base_messages, mp_config.keywords_lower, mp_config.combined_exclude_keywords_lower
-        )
-        all_rejected.update(rejected_by_keywords)
-        logger.info(f"После фильтрации по ключевым словам: {len(filtered_messages)} сообщений")
-
-        if not filtered_messages:
-            # Помечаем все отфильтрованные как processed
-            # Sprint 6.4: Батч-обработка вместо N вызовов
-            updates = [
-                {'message_id': msg_id, 'rejection_reason': reason}
-                for msg_id, reason in all_rejected.items()
-            ]
-            await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
-            logger.info(f"Нет сообщений про {marketplace} после фильтрации")
-            return
-
-        # ШАГ 3: Проверка дубликатов
-        unique_messages, rejected_duplicates = await self.filter_duplicates(filtered_messages)
-        all_rejected.update(rejected_duplicates)
-        logger.info(f"После проверки дубликатов: {len(unique_messages)} уникальных")
-
-        if not unique_messages:
-            # Помечаем все отфильтрованные как processed
-            # Sprint 6.4: Батч-обработка вместо N вызовов
-            updates = [
-                {
-                    'message_id': msg_id,
-                    'is_duplicate': (reason == "is_duplicate"),
-                    'rejection_reason': reason
-                }
-                for msg_id, reason in all_rejected.items()
-            ]
-            await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
-            logger.warning("Все сообщения являются дубликатами")
-            return
-
-        # ШАГ 4: Отбор и форматирование через Gemini (ОДИН ЗАПРОС!)
-        # Sprint 6.5: Неблокирующие LLM вызовы
-        formatted_posts = await asyncio.to_thread(
-            self.gemini.select_and_format_marketplace_news,
-            unique_messages,
-            marketplace=marketplace,
-            top_n=mp_config.top_n,
-            marketplace_display_name=mp_config.display_name or marketplace,
-        )
-
-        if not formatted_posts:
-            # Sprint 6.4: Батч-обработка вместо N вызовов
-            updates = [
-                {'message_id': msg["id"], 'rejection_reason': "rejected_by_llm"}
-                for msg in unique_messages
-            ]
-            await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
-            logger.warning(f"Gemini не отобрал ни одной новости для {marketplace}")
-            return
-
-        logger.info(f"Gemini отобрал {len(formatted_posts)} новостей для {marketplace}")
-
-        # Сортируем от самой важной к менее важной
-        formatted_posts = sorted(formatted_posts, key=lambda x: x.get("score", 0), reverse=True)
-
-        formatted_ids = {post["source_message_id"] for post in formatted_posts}
-        # Sprint 6.4: Батч-обработка вместо N вызовов
-        updates = [
-            {'message_id': msg["id"], 'rejection_reason': "rejected_by_llm"}
-            for msg in unique_messages
-            if msg["id"] not in formatted_ids
-        ]
-        await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
-
-        # ШАГ 5: Модерация (если включена)
-        if self.moderation_enabled:
-            approved_posts = await self.moderate_posts(client, formatted_posts, marketplace)
-
-            if not approved_posts:
-                logger.warning("Все новости отклонены на этапе модерации")
-                return
-        else:
-            approved_posts = formatted_posts
-
-        # ШАГ 6: 2-стадийная модерация и публикация
-        # СТАДИЯ 2: Формируем дайджест и отправляем на утверждение
-        digest_text = self._format_digest(approved_posts, mp_config.target_channel)
-        moderator_username = self.config.my_personal_account
-
-        # Ждем утверждения от модератора
-        is_approved = await self._approve_digest(client, moderator_username, digest_text)
-
-        if not is_approved:
-            logger.warning(f"❌ Модератор отменил публикацию дайджеста {marketplace}")
-            # Помечаем все отфильтрованные сообщения как rejected
-            updates = [
-                {
-                    'message_id': msg_id,
-                    'is_duplicate': (reason == "is_duplicate"),
-                    'rejection_reason': reason
-                }
-                for msg_id, reason in all_rejected.items()
-            ]
-            await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
-            return
-
-        # ПУБЛИКАЦИЯ: Дайджест утвержден
-        logger.info(f"📢 Публикация утвержденного дайджеста {marketplace}...")
-
-        await self.publish_digest(
-            client,
-            approved_posts,
-            marketplace,
-            mp_config.target_channel,
-            display_name=mp_config.display_name or marketplace,
-        )
-
-        # Помечаем сообщения как обработанные
-        await self._mark_messages_processed(approved_posts)
-
-        # ШАГ 7: Помечаем все отфильтрованные сообщения как processed
-        # Sprint 6.4: Батч-обработка вместо N вызовов
-        updates = [
-            {
-                'message_id': msg_id,
-                'is_duplicate': (reason == "is_duplicate"),
-                'rejection_reason': reason
-            }
-            for msg_id, reason in all_rejected.items()
-        ]
-        await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
-
-        logger.info(f"✅ Обработка {marketplace} завершена!")
+    # СТАРАЯ СИСТЕМА УДАЛЕНА: метод process_category() больше не используется
+    # Используется только 3-категорийная система через process_all_categories()
 
     def _filter_by_keywords(
         self, messages: list[dict], keywords_lower: list[str], exclude_keywords_lower: list[str]
@@ -519,7 +346,7 @@ class NewsProcessor:
         logger.info("=" * 80)
 
         # Sprint 6.3: Неблокирующий доступ к БД
-        base_messages = await asyncio.to_thread(self.db.get_unprocessed_messages, hours=48)
+        base_messages = await asyncio.to_thread(self.db.get_unprocessed_messages, hours=24)
         logger.info(f"Загружено {len(base_messages)} необработанных сообщений")
 
         if not base_messages:
@@ -630,24 +457,10 @@ class NewsProcessor:
             if post.get("source_message_id")
         }
 
-        # Помечаем сообщения, которые прошли отбор Gemini, но не попали в итоговую публикацию
-        # Sprint 6.4: Батч-обработка вместо N вызовов
+        # Сохраняем ID для последующей пометки (только после успешной публикации)
         rejected_after_moderation = selected_ids - approved_ids
-        updates = [
-            {'message_id': msg_id, 'rejection_reason': "rejected_by_moderator"}
-            for msg_id in rejected_after_moderation
-        ]
-        await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
-
-        # Помечаем сообщения, которые Gemini не выбрал вовсе
-        # Sprint 6.4: Батч-обработка вместо N вызовов
         unique_ids = {msg["id"] for msg in unique_messages}
         not_selected_ids = unique_ids - selected_ids
-        updates = [
-            {'message_id': msg_id, 'rejection_reason': "rejected_by_llm"}
-            for msg_id in not_selected_ids
-        ]
-        await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
 
         # ШАГ 6: 2-стадийная модерация и публикация
         target_channel = (
@@ -668,16 +481,7 @@ class NewsProcessor:
 
         if not is_approved:
             logger.warning("❌ Модератор отменил публикацию дайджеста")
-            # Помечаем все отфильтрованные сообщения как rejected
-            updates = [
-                {
-                    'message_id': msg_id,
-                    'is_duplicate': (reason == "is_duplicate"),
-                    'rejection_reason': reason
-                }
-                for msg_id, reason in all_rejected.items()
-            ]
-            await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
+            # НЕ помечаем сообщения как обработанные - они останутся для повторной обработки
             return
 
         # ПУБЛИКАЦИЯ: Дайджест утвержден
@@ -691,11 +495,26 @@ class NewsProcessor:
             display_name="Категории",
         )
 
-        # Помечаем сообщения как обработанные
+        # ШАГ 7: Помечаем сообщения как обработанные (только после успешной публикации)
+
+        # 7.1: Сообщения, которые вошли в публикацию
         await self._mark_messages_processed(approved_posts)
 
-        # ШАГ 7: Помечаем все отфильтрованные сообщения как processed
-        # Sprint 6.4: Батч-обработка вместо N вызовов
+        # 7.2: Сообщения, которые прошли отбор Gemini, но были исключены модератором
+        updates = [
+            {'message_id': msg_id, 'rejection_reason': "rejected_by_moderator"}
+            for msg_id in rejected_after_moderation
+        ]
+        await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
+
+        # 7.3: Сообщения, которые Gemini не выбрал
+        updates = [
+            {'message_id': msg_id, 'rejection_reason': "rejected_by_llm"}
+            for msg_id in not_selected_ids
+        ]
+        await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
+
+        # 7.4: Сообщения, отфильтрованные по ключевым словам или дубликаты
         updates = [
             {
                 'message_id': msg_id,
@@ -929,7 +748,7 @@ class NewsProcessor:
         Args:
             client: Telegram клиент
             personal_account: Username модератора
-            digest_text: Отформатированный текст дайджеста
+            digest_text: Отформатированный текст дайджеста (используется для подсчета длины)
 
         Returns:
             True если одобрено, False если отменено
@@ -939,10 +758,11 @@ class NewsProcessor:
         logger.info("📋 Отправка дайджеста на утверждение...")
 
         try:
-            # Формируем сообщение с дайджестом и инструкциями
-            approval_message = f"{digest_text}\n\n"
-            approval_message += "=" * 50 + "\n"
-            approval_message += "**📢 УТВЕРЖДЕНИЕ ДАЙДЖЕСТА**\n\n"
+            # Формируем КРАТКОЕ сообщение для утверждения (без полного текста)
+            approval_message = "**📢 УТВЕРЖДЕНИЕ ДАЙДЖЕСТА**\n\n"
+            approval_message += f"📊 Готов дайджест из новостей\n"
+            approval_message += f"📏 Размер: {len(digest_text)} символов\n\n"
+            approval_message += "=" * 50 + "\n\n"
             approval_message += "Отправь команду для публикации:\n"
             approval_message += "• `опубликовать` / `ok` / `да` - опубликовать\n"
             approval_message += "• `отмена` - отменить публикацию\n"
@@ -1352,13 +1172,8 @@ class NewsProcessor:
         # QA-2: Обновляем кэш после публикации для детектирования дубликатов в последующих категориях
         self._update_published_cache(post_ids, list(embeddings_array))
 
-    async def run(self, use_categories=True):
-        """Запуск обработки для всех категорий
-
-        Args:
-            use_categories: Если True - использует новую 3-категорийную систему (5+5+5=15, выбор 10)
-                           Если False - использует старую систему (обработка каждой категории отдельно)
-        """
+    async def run(self):
+        """Запуск обработки новостей через 3-категорийную систему"""
 
         # Подключаемся к Telegram с использованием основной сессии
         # Используем safe_connect для предотвращения FloodWait блокировок
@@ -1370,25 +1185,8 @@ class NewsProcessor:
         await safe_connect(client, session_name)
 
         try:
-            if use_categories:
-                # НОВАЯ СИСТЕМА: 3 категории (WB + Ozon + Общие)
-                await self.process_all_categories(client)
-            else:
-                # СТАРАЯ СИСТЕМА: Обрабатываем каждую категорию отдельно
-
-                # CR-H1: Загружаем сообщения ОДИН раз для всех категорий
-                # Sprint 6.3: Неблокирующий доступ к БД
-                base_messages = await asyncio.to_thread(self.db.get_unprocessed_messages, hours=24)
-                logger.info(
-                    f"📦 CR-H1: Загружено {len(base_messages)} сообщений (будут переиспользованы для {len(self.category_names)} категорий)"
-                )
-
-                for category_name in self.category_names:
-                    try:
-                        # Передаем кэшированные base_messages вместо повторного чтения из БД
-                        await self.process_category(category_name, client, base_messages=base_messages)
-                    except Exception as e:
-                        logger.error(f"Ошибка обработки {category_name}: {e}", exc_info=True)
+            # Обрабатываем через 3-категорийную систему
+            await self.process_all_categories(client)
         finally:
             await client.disconnect()
             self.db.close()

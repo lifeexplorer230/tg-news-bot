@@ -55,7 +55,20 @@ class FakeDB:
 
 class FakeClient:
     async def send_message(self, *args, **kwargs):
-        return None
+        # Возвращаем mock объект с атрибутом date для утверждения дайджеста
+        from datetime import datetime, timezone
+        mock_message = SimpleNamespace(date=datetime.now(timezone.utc))
+        return mock_message
+
+    async def get_messages(self, *args, **kwargs):
+        # Возвращаем mock сообщение от модератора с командой "опубликовать"
+        from datetime import datetime, timezone
+        mock_message = SimpleNamespace(
+            date=datetime.now(timezone.utc),
+            text="опубликовать",
+            out=False  # Входящее сообщение
+        )
+        return [mock_message]
 
 
 def make_processor(messages, moderation_enabled=False):

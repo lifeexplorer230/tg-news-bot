@@ -139,6 +139,10 @@ async def run_processor_mode(config: Config | None = None):
     logger.info("=" * 80)
 
     processor = NewsProcessor(config)
+
+    # 3-категорийная система для всех профилей:
+    # - AI: models + tools + use_cases + fun + education + research (15 новостей → исключить 5 → 10)
+    # - Marketplace: ozon + wildberries + general (15 новостей → исключить 5 → 10)
     await processor.run()
 
 
