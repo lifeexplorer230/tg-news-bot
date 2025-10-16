@@ -20,6 +20,9 @@ logger = setup_logger(__name__)
 class TelegramListener:
     """Слушатель Telegram каналов"""
 
+    # Security: Максимальный размер входящего сообщения (100KB)
+    MAX_MESSAGE_SIZE = 100000
+
     def __init__(self, config: Config):
         """
         Инициализация слушателя
@@ -249,6 +252,16 @@ class TelegramListener:
                 return
 
             text = message.text.strip()
+
+            # Security: Валидация размера сообщения для защиты от DoS
+            if len(text) > self.MAX_MESSAGE_SIZE:
+                logger.warning(
+                    "Сообщение слишком большое: %d байт (макс: %d). Канал: %s",
+                    len(text),
+                    self.MAX_MESSAGE_SIZE,
+                    event.chat_id,
+                )
+                return
 
             # Фильтры
             if len(text) < self.min_message_length:
