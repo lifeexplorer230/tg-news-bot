@@ -1,6 +1,7 @@
 """Сервис отправки статуса бота в Telegram группу"""
 
 import time
+from datetime import timedelta
 from pathlib import Path
 
 from telethon import TelegramClient
@@ -34,8 +35,8 @@ class StatusReporter:
         self.status_chat = config.get("status.chat", "Soft Status")
         self.bot_name = config.get("status.bot_name", "Marketplace News Bot")
         self.message_template = config.get("status.message_template", "")
-        self.heartbeat_path = Path(config.get("listener.heartbeat_path", "./logs/listener.heartbeat"))
-        self.heartbeat_max_age = config.get("listener.heartbeat_max_age", 180)
+        self.heartbeat_path = Path(config.get("listener.healthcheck.heartbeat_path", "./logs/listener.heartbeat"))
+        self.heartbeat_max_age = config.get("listener.healthcheck.max_age_seconds", 180)
 
     def _check_listener_status(self) -> dict:
         """
@@ -75,6 +76,73 @@ class StatusReporter:
                 "listener_status_emoji": "❌",
             }
 
+    def _calculate_next_status_time(self) -> str:
+        """
+        Вычислить время следующей отправки статуса
+
+        Returns:
+            str: Строка с временем следующего статуса
+        """
+        interval_minutes = self.config.get("status.interval_minutes", 60)
+
+        try:
+            # Получаем текущее время в нужной timezone
+            now = now_in_timezone(self.timezone)
+
+            # Добавляем интервал
+            next_status = now + timedelta(minutes=interval_minutes)
+
+            # Форматируем результат
+            return f"через {interval_minutes} мин ({next_status.strftime('%H:%M')})"
+
+        except (ValueError, TypeError) as e:
+            logger.error(f"Ошибка при вычислении времени следующего статуса: {e}", exc_info=True)
+            return "неизвестно"
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка при вычислении времени следующего статуса: {e}", exc_info=True)
+            return "неизвестно"
+
+    def _calculate_next_processor_time(self) -> str:
+        """
+        Вычислить время следующего запуска processor
+
+        Returns:
+            str: Строка с временем и датой следующего запуска
+        """
+        # Получаем schedule_time из конфига (например "08:00")
+        schedule_time_str = self.config.get("processor.schedule_time", "09:00")
+
+        try:
+            # Парсим время
+            hour, minute = map(int, schedule_time_str.split(":"))
+        except ValueError as e:
+            logger.error(f"Неверный формат schedule_time '{schedule_time_str}': {e}")
+            return "неизвестно (ошибка конфигурации)"
+
+        try:
+            # Получаем текущее время в нужной timezone
+            now = now_in_timezone(self.timezone)
+
+            # Создаем datetime для следующего запуска сегодня
+            next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+            # Если время уже прошло сегодня, берем завтра
+            if next_run <= now:
+                next_run = next_run + timedelta(days=1)
+
+            # Форматируем результат
+            if next_run.date() == now.date():
+                return f"сегодня в {next_run.strftime('%H:%M')}"
+            else:
+                return f"завтра в {next_run.strftime('%H:%M')}"
+
+        except (ValueError, TypeError) as e:
+            logger.error(f"Ошибка при вычислении времени следующего запуска: {e}", exc_info=True)
+            return "неизвестно"
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка при вычислении времени следующего запуска: {e}", exc_info=True)
+            return "неизвестно"
+
     async def send_status(self):
         """Отправить статус в группу"""
         try:
@@ -83,6 +151,12 @@ class StatusReporter:
 
             # Проверяем состояние Listener
             listener_info = self._check_listener_status()
+
+            # Вычисляем время следующей отправки статуса
+            next_status_time = self._calculate_next_status_time()
+
+            # Вычисляем время следующего запуска processor
+            next_processor_time = self._calculate_next_processor_time()
 
             # Формируем сообщение
             now = now_in_timezone(self.timezone)
@@ -101,6 +175,8 @@ class StatusReporter:
                 "active_channels": stats.get("active_channels", 0),
                 "total_messages": stats.get("total_messages", 0),
                 "total_published": stats.get("total_published", 0),
+                "next_status_time": next_status_time,
+                "next_processor_time": next_processor_time,
                 **listener_info,  # Добавляем информацию о listener
             }
 
@@ -169,6 +245,10 @@ class StatusReporter:
             f"   🔗 Активных каналов: {context['active_channels']}\n\n"
             "🎧 **Listener:**\n"
             f"   {context['listener_status']}\n\n"
+            "⏰ **Следующий статус:**\n"
+            f"   {context['next_status_time']}\n\n"
+            "📰 **Следующий дайджест:**\n"
+            f"   {context['next_processor_time']}\n\n"
             f"{context['listener_status_emoji']} Бот работает"
         )
         return message

@@ -20,7 +20,7 @@ listener:
   channel_whitelist: []  # список юзернеймов каналов, которые нужно слушать (если пусто — все)
   channel_blacklist: []  # список юзернеймов каналов, которые нужно исключить
   healthcheck:
-    heartbeat_path: ./logs/listener.heartbeat    # файл для проверки здоровья контейнера
+    # heartbeat_path наследуется из base.yaml с правильной подстановкой профиля
     interval_seconds: 60                         # как часто обновлять heartbeat
     max_age_seconds: 180                         # через сколько секунд healthcheck считает сервис упавшим
 
