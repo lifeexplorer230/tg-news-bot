@@ -12,6 +12,7 @@ from services.embeddings import EmbeddingService
 from services.gemini_client import GeminiClient
 from utils.config import Config
 from utils.logger import get_logger
+from utils.rate_limiter import RateLimiter
 from utils.telegram_helpers import safe_connect
 from utils.timezone import now_msk
 
@@ -24,12 +25,17 @@ class NewsProcessor:
     # Константы для работы с Telegram API
     TELEGRAM_MESSAGE_LIMIT = 4096  # Максимальная длина сообщения в Telegram
     PREVIEW_SAFETY_MARGIN = 50     # Запас символов для безопасности
+    MAX_MESSAGE_SIZE = 100000      # 100KB - максимальный размер входящего сообщения (security)
 
     def __init__(self, config: Config):
         self.config = config
         self.db = Database(config.db_path, **config.database_settings())
         self._embedding_service: EmbeddingService | None = None
         self._gemini_client: GeminiClient | None = None
+
+        # Security: Rate limiter для защиты от Telegram API limits
+        # 20 сообщений в минуту в одну группу (по документации Telegram)
+        self._rate_limiter = RateLimiter(max_requests=20, per_seconds=60)
 
         # Кэш для оптимизации (CR-H1)
         self._cached_published_embeddings: list[tuple[int, any]] | None = None
@@ -1155,18 +1161,22 @@ class NewsProcessor:
         preview_channel = (self.publication_preview_channel or "").strip()
         if preview_channel:
             try:
+                # Security: Rate limiting для защиты от Telegram API ban
+                await self._rate_limiter.acquire()
                 await client.send_message(preview_channel, digest)
                 logger.info("📄 Черновик дайджеста отправлен в %s", preview_channel)
             except Exception as exc:  # noqa: BLE001
                 logger.error("Не удалось отправить превью в %s: %s", preview_channel, exc)
 
         # Публикуем
+        await self._rate_limiter.acquire()
         await client.send_message(target_channel, digest)
         logger.info(f"✅ Дайджест опубликован в {target_channel}")
 
         notify_account = (self.publication_notify_account or "").strip()
         if notify_account:
             try:
+                await self._rate_limiter.acquire()
                 await client.send_message(
                     notify_account,
                     f"✅ Дайджест на {context['date']} опубликован в {target_channel}",

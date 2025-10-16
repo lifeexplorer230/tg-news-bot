@@ -11,6 +11,21 @@ from utils.logger import configure_logging, get_logger
 logger = get_logger(__name__)
 
 
+def mask_phone(phone: str) -> str:
+    """
+    Маскирует номер телефона для безопасного логирования
+
+    Args:
+        phone: Номер телефона (например, +79252124626)
+
+    Returns:
+        Маскированный номер (например, +79****4626)
+    """
+    if not phone or len(phone) < 8:
+        return "***"
+    return phone[:3] + "****" + phone[-4:]
+
+
 async def authorize():
     """Авторизация в Telegram"""
     config = load_config()
@@ -32,7 +47,8 @@ async def authorize():
     await client.connect()
 
     if not await client.is_user_authorized():
-        logger.info("📱 Отправляем код на %s", config.telegram_phone)
+        # Security: маскируем номер телефона в логах
+        logger.info("📱 Отправляем код на %s", mask_phone(config.telegram_phone))
         await client.send_code_request(config.telegram_phone)
 
         logger.info("✉️ Код отправлен! Введите код из Telegram:")
