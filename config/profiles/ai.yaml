@@ -69,7 +69,7 @@ status:
   enabled: true
   chat: Soft Status
   bot_name: AI News Bot
-  interval_minutes: 120
+  interval_minutes: 30  # Уменьшено с 120 для более частого мониторинга состояния бота
   bot_token: ''
   timezone: Europe/Moscow
 

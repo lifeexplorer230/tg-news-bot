@@ -51,7 +51,7 @@ listener:
   channel_blacklist: []      # Чёрный список каналов
   manual_channels: []        # Список каналов для режима manual
   healthcheck:
-    heartbeat_path: "{logs_dir}/listener.heartbeat"
+    heartbeat_path: "{logs_dir}/{profile}/listener.heartbeat"
     interval_seconds: 60     # Как часто обновлять heartbeat (секунды)
     max_age_seconds: 180     # Максимальный возраст heartbeat (секунды)
 
@@ -115,6 +115,9 @@ status:
 
     🎧 **Listener:**
       {listener_status}
+
+    ⏰ **Следующая проверка:**
+      {next_processor_time}
 
     {listener_status_emoji} Бот работает
 
