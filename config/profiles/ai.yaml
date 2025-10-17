@@ -66,11 +66,11 @@ channels:
       research: 1    # НИЗКИЙ ПРИОРИТЕТ: Научные прорывы, SOTA результаты
 
 status:
-  enabled: true
-  chat: Soft Status
+  enabled: true  # Включен со своим bot token (избегает конфликта сессий)
+  chat: '@SoftStatustnb'
   bot_name: AI News Bot
-  interval_minutes: 30  # Уменьшено с 120 для более частого мониторинга состояния бота
-  bot_token: ''
+  interval_minutes: 30  # Статус каждые 30 минут
+  bot_token: 'STATUS_BOT_TOKEN_REDACTED'
   timezone: Europe/Moscow
 
 logging:
