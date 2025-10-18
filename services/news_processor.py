@@ -196,6 +196,7 @@ class NewsProcessor:
 
         Оптимизировано (CR-H1): загружаем published_embeddings один раз и кэшируем
         Оптимизировано (CR-C5): используем batch encoding вместо последовательного encode
+        Улучшено: двухэтапная дедупликация (published + intra-batch)
 
         Returns:
             Tuple of (unique_messages, rejected_reasons)
@@ -228,7 +229,10 @@ class NewsProcessor:
         embeddings_array = await self.embeddings.encode_batch_async(texts, batch_size=32)
         logger.debug(f"CR-C5: Batch encoded {len(texts)} messages (shape: {embeddings_array.shape})")
 
-        # Проверяем каждое сообщение на дубликаты
+        # ЭТАП 1: Проверяем каждое сообщение на дубликаты с опубликованными
+        unique_from_published = []
+        unique_embeddings = []
+
         for msg, embedding in zip(messages, embeddings_array):
             # Проверяем на дубликаты (inline вместо db.check_duplicate)
             # Sprint 6.3.4: удалён неиспользуемый аргумент published_embeddings
@@ -240,9 +244,117 @@ class NewsProcessor:
                 rejected[msg["id"]] = "is_duplicate"
                 continue
 
-            unique.append(msg)
+            unique_from_published.append(msg)
+            unique_embeddings.append(embedding)
+
+        logger.debug(
+            f"После проверки с published: {len(unique_from_published)} уникальных "
+            f"({len(rejected)} дубликатов)"
+        )
+
+        # ЭТАП 2 (НОВОЕ): Проверяем дубликаты внутри батча новых сообщений
+        # Это решает проблему когда одна новость попала в несколько каналов
+        intra_batch_duplicates = 0
+        seen_embeddings = []
+
+        for msg, embedding in zip(unique_from_published, unique_embeddings):
+            if not seen_embeddings:
+                # Первое сообщение всегда уникально
+                unique.append(msg)
+                seen_embeddings.append(embedding)
+                continue
+
+            # Проверяем similarity с уже принятыми сообщениями из батча
+            seen_matrix = np.array(seen_embeddings)
+            similarities = self.embeddings.batch_cosine_similarity(embedding, seen_matrix)
+            max_similarity = np.max(similarities) if len(similarities) > 0 else 0.0
+
+            if max_similarity >= self.duplicate_threshold:
+                # Найден дубликат внутри батча
+                rejected[msg["id"]] = "intra_batch_duplicate"
+                intra_batch_duplicates += 1
+                logger.debug(
+                    f"Intra-batch дубликат обнаружен: msg_id={msg['id']}, "
+                    f"similarity={max_similarity:.3f}"
+                )
+            else:
+                # Уникальное сообщение
+                unique.append(msg)
+                seen_embeddings.append(embedding)
+
+        logger.info(
+            f"Дедупликация завершена: {len(unique)} уникальных, "
+            f"{len(rejected)} дубликатов (из них {intra_batch_duplicates} внутри батча)"
+        )
 
         return unique, rejected
+
+    async def deduplicate_selected_posts(
+        self, posts: list[dict], threshold: float = 0.85
+    ) -> tuple[list[dict], list[dict]]:
+        """
+        Дедупликация отобранных Gemini новостей перед модерацией
+
+        Gemini получает инструкции по дедупликации через промпт и должен отбирать разные новости.
+        Этот метод - дополнительная защита от ОЧЕНЬ похожих новостей на случай ошибки AI.
+
+        Args:
+            posts: Список новостей после отбора Gemini (с title, description)
+            threshold: Порог схожести (0.85 = удаляем только почти идентичные дубликаты)
+
+        Returns:
+            Tuple of (unique_posts, duplicates)
+        """
+        if not posts:
+            return [], []
+
+        unique = []
+        duplicates = []
+        seen_embeddings = []
+
+        # Создаём embeddings для каждого поста
+        # Используем title + description для более точной проверки
+        texts = [
+            f"{post.get('title', '')} {post.get('description', '')}"
+            for post in posts
+        ]
+        embeddings_array = await self.embeddings.encode_batch_async(texts, batch_size=32)
+
+        logger.debug(
+            f"Post-Gemini дедупликация: проверяем {len(posts)} новостей (порог={threshold})"
+        )
+
+        for post, embedding in zip(posts, embeddings_array):
+            if not seen_embeddings:
+                # Первый пост всегда уникален
+                unique.append(post)
+                seen_embeddings.append(embedding)
+                continue
+
+            # Проверяем similarity с уже принятыми постами
+            seen_matrix = np.array(seen_embeddings)
+            similarities = self.embeddings.batch_cosine_similarity(embedding, seen_matrix)
+            max_similarity = np.max(similarities) if len(similarities) > 0 else 0.0
+
+            if max_similarity >= threshold:
+                # Найден дубликат среди отобранных Gemini новостей
+                duplicates.append(post)
+                duplicate_idx = np.argmax(similarities)
+                logger.info(
+                    f"🔍 Post-Gemini дубликат: '{post.get('title', '')[:50]}...' "
+                    f"похожа на #{duplicate_idx+1} (similarity={max_similarity:.3f})"
+                )
+            else:
+                # Уникальная новость
+                unique.append(post)
+                seen_embeddings.append(embedding)
+
+        logger.info(
+            f"✅ Post-Gemini дедупликация: {len(unique)} уникальных, "
+            f"{len(duplicates)} дубликатов удалено"
+        )
+
+        return unique, duplicates
 
     def _update_published_cache(self, post_ids: list[int], embeddings: list[np.ndarray]):
         """
@@ -443,6 +555,49 @@ class NewsProcessor:
             ]
             await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
             return
+
+        # ШАГ 4.5 (НОВОЕ): Дедупликация после Gemini
+        # Gemini может выбрать похожие новости из разных чунков обработки
+        # Фильтруем почти идентичные новости перед отправкой на модерацию
+        # Порог 0.85 - удаляем только очень похожие дубликаты (основная работа делегирована Gemini через промпт)
+        all_selected_posts = [post for posts in categories.values() for post in posts]
+        unique_posts, post_duplicates = await self.deduplicate_selected_posts(
+            all_selected_posts, threshold=0.85
+        )
+
+        # Если после дедупликации не осталось новостей
+        if not unique_posts:
+            logger.warning("После post-Gemini дедупликации не осталось новостей")
+            updates = [
+                {'message_id': msg["id"], 'rejection_reason': "rejected_by_llm"}
+                for msg in unique_messages
+            ]
+            await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
+            return
+
+        # Пересобираем categories без дубликатов
+        # Сохраняем только уникальные посты в каждой категории
+        unique_post_ids = {id(post) for post in unique_posts}
+        filtered_categories = {}
+        for cat_name, posts in categories.items():
+            filtered_posts = [post for post in posts if id(post) in unique_post_ids]
+            if filtered_posts:
+                filtered_categories[cat_name] = filtered_posts
+
+        categories = filtered_categories
+        total_count = len(unique_posts)
+
+        # Обновляем selected_ids без дубликатов
+        selected_ids = {
+            post["source_message_id"]
+            for post in unique_posts
+            if post.get("source_message_id")
+        }
+
+        logger.info(
+            f"После post-Gemini дедупликации: {total_count} уникальных новостей "
+            f"({len(post_duplicates)} дубликатов удалено)"
+        )
 
         # ШАГ 5: Модерация (выбор 10 из 15)
         if self.moderation_enabled:
