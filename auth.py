@@ -19,11 +19,23 @@ def mask_phone(phone: str) -> str:
         phone: Номер телефона (например, +79252124626)
 
     Returns:
-        Маскированный номер (например, +79****4626)
+        Маскированный номер (например, +792****4626)
+
+    Examples:
+        >>> mask_phone("+79252124626")
+        '+792****4626'
+        >>> mask_phone("+792****4626")  # Already masked
+        '***'
     """
     if not phone or len(phone) < 8:
         return "***"
-    return phone[:3] + "****" + phone[-4:]
+
+    # Check if already masked (idempotent)
+    if "****" in phone:
+        return "***"
+
+    # Show 3 digits + "****" + 4 digits = 7 visible digits
+    return phone[:4] + "****" + phone[-4:]
 
 
 async def authorize():
