@@ -29,7 +29,16 @@ class RateLimiter:
         Args:
             max_requests: Максимальное количество запросов
             per_seconds: Период времени в секундах
+
+        Raises:
+            ValueError: If max_requests < 1 or per_seconds < 1
         """
+        # Validate parameters to prevent edge cases
+        if max_requests < 1:
+            raise ValueError(f"max_requests должен быть >= 1, получено: {max_requests}")
+        if per_seconds < 1:
+            raise ValueError(f"per_seconds должен быть >= 1, получено: {per_seconds}")
+
         self.max_requests = max_requests
         self.per_seconds = per_seconds
         self.requests: deque[datetime] = deque()
