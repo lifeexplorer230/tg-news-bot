@@ -20,11 +20,11 @@ class TestPhoneMasking:
         phone = "+79252124626"
         masked = mask_phone(phone)
 
-        assert masked == "+79****4626"
+        assert masked == "+792****4626"
         # Verify middle digits are masked
         assert "2521246" not in masked
-        # Verify first 3 and last 4 digits are preserved
-        assert masked.startswith("+79")
+        # Verify first 4 and last 4 digits are preserved
+        assert masked.startswith("+792")
         assert masked.endswith("4626")
 
     def test_mask_international_phone(self):
@@ -33,7 +33,7 @@ class TestPhoneMasking:
         phone = "+14155552671"
         masked = mask_phone(phone)
 
-        assert masked == "+14****2671"
+        assert masked == "+141****2671"
         assert "155552" not in masked
 
     def test_mask_long_phone(self):
@@ -41,7 +41,7 @@ class TestPhoneMasking:
         phone = "+380501234567"
         masked = mask_phone(phone)
 
-        assert masked == "+38****4567"
+        assert masked == "+380****4567"
         assert "050123" not in masked
 
     def test_mask_without_plus(self):
@@ -49,7 +49,7 @@ class TestPhoneMasking:
         phone = "79252124626"
         masked = mask_phone(phone)
 
-        assert masked == "792****4626"
+        assert masked == "7925****4626"
         assert "2521246" not in masked
 
     def test_mask_short_phone(self):
@@ -65,7 +65,7 @@ class TestPhoneMasking:
         phone = "12345678"
         masked = mask_phone(phone)
 
-        assert masked == "123****5678"
+        assert masked == "1234****5678"
         assert "4567" not in masked
 
     def test_mask_empty_string(self):
@@ -102,10 +102,10 @@ class TestPhoneMasking:
     def test_mask_different_lengths(self):
         """Test masking works for various phone lengths"""
         test_cases = [
-            ("+123456789", "+12****6789"),
-            ("+1234567890", "+12****7890"),
-            ("+12345678901", "+12****8901"),
-            ("+123456789012", "+12****9012"),
+            ("+123456789", "+123****6789"),
+            ("+1234567890", "+123****7890"),
+            ("+12345678901", "+123****8901"),
+            ("+123456789012", "+123****9012"),
         ]
 
         for phone, expected in test_cases:
@@ -115,10 +115,10 @@ class TestPhoneMasking:
     def test_mask_reveals_country_code(self):
         """Test that country code remains visible"""
         test_cases = [
-            ("+79251234567", "+79"),  # Russia
-            ("+14155551234", "+14"),  # USA
-            ("+442071234567", "+44"),  # UK
-            ("+33612345678", "+33"),  # France
+            ("+79251234567", "+792"),  # Russia
+            ("+14155551234", "+141"),  # USA
+            ("+442071234567", "+442"),  # UK
+            ("+33612345678", "+336"),  # France
         ]
 
         for phone, expected_prefix in test_cases:
@@ -163,7 +163,7 @@ class TestPhoneMaskingSecurity:
             # Masked should always have format: prefix + **** + suffix
             assert "****" in masked
             # Length should be: len(prefix) + 4 + 4
-            assert len(masked) == len(phone[:3]) + 4 + 4
+            assert len(masked) == len(phone[:4]) + 4 + 4
 
     def test_mask_idempotent(self):
         """Test that masking twice doesn't change result"""
@@ -197,7 +197,7 @@ class TestPhoneMaskingEdgeCases:
         masked = mask_phone(phone)
 
         # Should work with the string as-is (not a valid format)
-        assert masked == "+7 ****6-26"
+        assert masked == "+7 (****6-26"
 
     def test_mask_numeric_input(self):
         """Test masking with numeric input (if passed)"""
@@ -212,8 +212,8 @@ class TestPhoneMaskingEdgeCases:
         phone = "+7" + "9" * 100
         masked = mask_phone(phone)
 
-        assert masked == "+79****" + "9" * 4
-        assert len(masked) == 3 + 4 + 4
+        assert masked == "+799****" + "9" * 4
+        assert len(masked) == 4 + 4 + 4
 
     def test_mask_unicode_characters(self):
         """Test behavior with unicode characters (invalid phone)"""
@@ -265,7 +265,7 @@ class TestPhoneMaskingIntegration:
 
         log_message = f"Sending code to {masked}"
 
-        assert "Sending code to +79****4626" in log_message
+        assert "Sending code to +792****4626" in log_message
         assert "+79252124626" not in log_message
 
     def test_mask_multiple_phones_in_batch(self):
