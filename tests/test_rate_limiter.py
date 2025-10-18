@@ -94,13 +94,9 @@ class TestRateLimiterEdgeCases:
     @pytest.mark.asyncio
     async def test_zero_max_requests(self):
         """Test behavior with max_requests=0 (edge case)"""
-        limiter = RateLimiter(max_requests=0, per_seconds=1)
-
-        # Should block indefinitely or handle gracefully
-        # In current implementation, this would block forever
-        # Let's test with a timeout to verify blocking behavior
-        with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(limiter.acquire(), timeout=0.5)
+        # Should raise ValueError on initialization
+        with pytest.raises(ValueError, match="max_requests должен быть >= 1"):
+            RateLimiter(max_requests=0, per_seconds=1)
 
     @pytest.mark.asyncio
     async def test_very_short_time_window(self):
