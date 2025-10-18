@@ -22,12 +22,14 @@ wheels/
 
 # Virtual Environment
 venv/
+.venv/
 ENV/
 env/
 
 # IDEs
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *~
