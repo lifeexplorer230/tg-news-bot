@@ -75,6 +75,16 @@ def make_processor(messages, moderation_enabled=False):
     processor = NewsProcessor.__new__(NewsProcessor)
     processor.config = SimpleNamespace(my_personal_account="tester")
     processor.db = FakeDB(messages)
+
+    # Initialize all private attributes that __init__ would set
+    # This prevents AttributeError when properties try to access them
+    processor._embedding_service = None
+    processor._gemini_client = None
+    processor._rate_limiter = None
+    processor._cached_published_embeddings = None
+    processor._published_embeddings_matrix = None
+    processor._published_embeddings_ids = None
+
     processor.global_exclude_keywords = ["spam"]
     processor.categories = {
         "ozon": Category(
@@ -117,8 +127,16 @@ def make_processor(messages, moderation_enabled=False):
     async def fake_publish_digest(*args, **kwargs):
         return None
 
+    # Mock embedding service for deduplication
+    async def fake_encode_batch_async(texts, batch_size=32):
+        # Return fake embeddings (384-dimensional vectors as in the real model)
+        return [[0.0] * 384 for _ in texts]
+
     processor.filter_duplicates = fake_filter_duplicates
     processor.publish_digest = fake_publish_digest
+    processor._embedding_service = SimpleNamespace(
+        encode_batch_async=fake_encode_batch_async
+    )
     return processor
 
 
