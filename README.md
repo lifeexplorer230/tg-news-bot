@@ -266,8 +266,11 @@ docker-compose run --rm marketplace-processor python main.py processor
 **НОВОЕ!** Автоматически превращает новости в готовые сценарии для Instagram Reels.
 
 ```bash
-# Запуск генерации сценариев
-python main.py reels --profile reels
+# Запуск генерации сценариев для AI-новостей
+python main.py reels --profile reels-ai
+
+# Запуск для маркетплейсов
+python main.py reels --profile reels-marketplace
 
 # Или использовать тестовый скрипт
 python test_reels_video_prompts.py
@@ -284,6 +287,10 @@ python test_reels_video_prompts.py
 4. Создает video_prompts для генерации видео через Sora 2
 5. Подбирает хэштеги, визуальные предложения, настроение музыки
 6. Отправляет готовые сценарии в Telegram для модерации
+
+**Поддерживаемые направления:**
+- AI-новости (`--profile reels-ai`)
+- Маркетплейсы (`--profile reels-marketplace`)
 
 **Документация:** См. [reels/README.md](reels/README.md) для подробностей.
 

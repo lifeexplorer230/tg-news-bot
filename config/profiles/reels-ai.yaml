@@ -1,21 +1,15 @@
-# Профиль конфигурации для Reels Generator (БАЗОВЫЙ ШАБЛОН)
-# Генерация сценариев Instagram Reels из новостей через Perplexity API
-#
-# РЕКОМЕНДУЕТСЯ использовать специализированные профили:
-# - reels-ai.yaml - для AI-новостей
-# - reels-marketplace.yaml - для маркетплейсов
-#
-# Этот профиль можно использовать как шаблон для создания новых профилей
+# Профиль конфигурации для Reels Generator - AI направление
+# Генерация сценариев Instagram Reels из AI-новостей через Perplexity API
 
-profile: reels
+profile: reels-ai
 
-# Переопределяем пути для профиля reels
+# Переопределяем пути для профиля reels-ai
 paths:
   data_dir: ./data
   logs_dir: ./logs
   sessions_dir: ./sessions
   db_file_pattern: "{data_dir}/{profile}_news.db"  # Используем БД из другого профиля
-  log_file_pattern: "{logs_dir}/{profile}/reels.log"
+  log_file_pattern: "{logs_dir}/reels/ai.log"
   session_file_pattern: "{sessions_dir}/{profile}/session"
 
 # Telegram настройки (используем AI профиль для отправки)
@@ -46,7 +40,7 @@ reels_processor:
 
   # Выбор новостей из БД
   db_source:
-    profile: ai  # Использовать БД из профиля ai
+    profile: ai  # Использовать БД из профиля AI
     table: published  # Таблица с опубликованными новостями
     days_back: 1  # Брать новости за последний N дней
 
@@ -55,13 +49,13 @@ output:
   # Отправка в Telegram
   telegram:
     enabled: true
-    channel: ${AI_MY_PERSONAL_ACCOUNT}  # Куда отправлять сценарии
+    channel: ${AI_MY_PERSONAL_ACCOUNT}  # Куда отправлять сценарии AI-новостей
     format: detailed  # detailed | compact
 
   # Сохранение в файлы (опционально)
   file:
     enabled: false
-    path: ./data/reels_output
+    path: ./data/reels_output/ai
     formats: [json]  # json | markdown
 
 # Логирование

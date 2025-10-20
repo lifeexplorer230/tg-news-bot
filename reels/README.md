@@ -43,26 +43,35 @@ pip install aiohttp tenacity
 ### Использование
 
 ```bash
-# Ручной запуск
+# Для AI-новостей
+python main.py reels --profile reels-ai
+
+# Для маркетплейсов (Ozon/Wildberries)
+python main.py reels --profile reels-marketplace
+
+# Универсальный профиль (для тестирования)
 python main.py reels --profile reels
-
-# Обработать только 5 новостей
-python main.py reels --profile reels --limit 5
-
-# Фильтр по категории
-python main.py reels --profile reels --category ai
 ```
+
+### Поддерживаемые направления
+
+Модуль поддерживает **2 направления новостей**:
+
+| Профиль | Источник данных | Назначение |
+|---------|-----------------|------------|
+| `reels-ai` | БД AI-новостей | Генерация сценариев для AI-тематики |
+| `reels-marketplace` | БД маркетплейсов | Генерация сценариев для Ozon/Wildberries |
 
 ### Автоматический запуск
 
-Добавьте в `config/profiles/reels.yaml`:
+Добавьте в нужный профиль (`reels-ai.yaml` или `reels-marketplace.yaml`):
 
 ```yaml
 reels_processor:
   auto_run_after_processor: true
 ```
 
-Теперь после `python main.py processor` автоматически запустится reels generator.
+Теперь после `python main.py processor --profile {направление}` автоматически запустится reels generator.
 
 ---
 

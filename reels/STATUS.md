@@ -52,13 +52,20 @@
 
 2. **Убедиться что есть новости в БД:**
    ```bash
-   # Должны быть опубликованные новости в профиле ai
+   # Для AI-новостей
    python main.py processor --profile ai
+
+   # Для маркетплейсов
+   python main.py processor --profile marketplace
    ```
 
 3. **Запустить генерацию сценариев:**
    ```bash
-   python main.py reels --profile reels
+   # Для AI-новостей
+   python main.py reels --profile reels-ai
+
+   # Для маркетплейсов
+   python main.py reels --profile reels-marketplace
    ```
 
 ### Тестовый запуск
@@ -159,10 +166,19 @@ print(f"Video prompts: {len(scenario.video_prompts)}")
 
 ## ⚙️ КОНФИГУРАЦИЯ
 
-### config/profiles/reels.yaml
+### Доступные профили
+
+Модуль поддерживает **2 направления**:
+
+| Профиль | Файл | Источник данных |
+|---------|------|-----------------|
+| `reels-ai` | `config/profiles/reels-ai.yaml` | БД AI-новостей (`./data/ai_news.db`) |
+| `reels-marketplace` | `config/profiles/reels-marketplace.yaml` | БД маркетплейсов (`./data/marketplace_news.db`) |
+
+### Пример конфигурации (reels-ai.yaml)
 
 ```yaml
-profile: reels
+profile: reels-ai
 
 perplexity:
   api_key: ${PERPLEXITY_API_KEY}
@@ -183,6 +199,8 @@ output:
     channel: ${AI_MY_PERSONAL_ACCOUNT}
     format: detailed  # или compact
 ```
+
+Для маркетплейсов аналогично, но `db_source.profile: marketplace`
 
 ---
 
