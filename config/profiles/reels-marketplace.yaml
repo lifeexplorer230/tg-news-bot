@@ -1,26 +1,20 @@
-# Профиль конфигурации для Reels Generator (БАЗОВЫЙ ШАБЛОН)
-# Генерация сценариев Instagram Reels из новостей через Perplexity API
-#
-# РЕКОМЕНДУЕТСЯ использовать специализированные профили:
-# - reels-ai.yaml - для AI-новостей
-# - reels-marketplace.yaml - для маркетплейсов
-#
-# Этот профиль можно использовать как шаблон для создания новых профилей
+# Профиль конфигурации для Reels Generator - Маркетплейсы
+# Генерация сценариев Instagram Reels из новостей Ozon/Wildberries через Perplexity API
 
-profile: reels
+profile: reels-marketplace
 
-# Переопределяем пути для профиля reels
+# Переопределяем пути для профиля reels-marketplace
 paths:
   data_dir: ./data
   logs_dir: ./logs
   sessions_dir: ./sessions
   db_file_pattern: "{data_dir}/{profile}_news.db"  # Используем БД из другого профиля
-  log_file_pattern: "{logs_dir}/{profile}/reels.log"
+  log_file_pattern: "{logs_dir}/reels/marketplace.log"
   session_file_pattern: "{sessions_dir}/{profile}/session"
 
-# Telegram настройки (используем AI профиль для отправки)
+# Telegram настройки (используем marketplace профиль для отправки)
 telegram:
-  session_name: "./sessions/ai/session"  # Используем существующую сессию AI
+  session_name: "./sessions/marketplace/session"  # Используем существующую сессию marketplace
 
 # Perplexity API настройки
 perplexity:
@@ -46,7 +40,7 @@ reels_processor:
 
   # Выбор новостей из БД
   db_source:
-    profile: ai  # Использовать БД из профиля ai
+    profile: marketplace  # Использовать БД из профиля marketplace
     table: published  # Таблица с опубликованными новостями
     days_back: 1  # Брать новости за последний N дней
 
@@ -55,13 +49,13 @@ output:
   # Отправка в Telegram
   telegram:
     enabled: true
-    channel: ${AI_MY_PERSONAL_ACCOUNT}  # Куда отправлять сценарии
+    channel: ${MY_PERSONAL_ACCOUNT}  # Куда отправлять сценарии для маркетплейсов
     format: detailed  # detailed | compact
 
   # Сохранение в файлы (опционально)
   file:
     enabled: false
-    path: ./data/reels_output
+    path: ./data/reels_output/marketplace
     formats: [json]  # json | markdown
 
 # Логирование
