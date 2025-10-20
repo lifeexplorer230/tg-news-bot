@@ -14,9 +14,6 @@ paths:
 
 # Telegram настройки (используем AI профиль для отправки)
 telegram:
-  api_id: ${TELEGRAM_API_ID}
-  api_hash: ${TELEGRAM_API_HASH}
-  phone: ${AI_TELEGRAM_PHONE}
   session_name: "./sessions/ai/session"  # Используем существующую сессию AI
 
 # Perplexity API настройки
@@ -64,10 +61,6 @@ output:
 # Логирование
 logging:
   level: INFO
-  log_tokens: true  # Логировать использование токенов Perplexity
-  log_file: ./logs/reels/reels.log
-  rotation: daily
-  retention_days: 30
 
 # Публикация (наследуем из base.yaml, но не используем)
 publication:

@@ -118,7 +118,7 @@ status:
   chat: '@SoftStatustnb'
   bot_name: Marketplace News Bot
   interval_minutes: 30
-  bot_token: '8293385906:AAFzdn_kWnSVVrPRoYADRzpr9HQooFQyKgQ'
+  bot_token: '8293385906:AAFzdn_kWnSVVrPRoYADRzpr9HQooFQyKgQ'  # @statusTNBbot
   timezone: Europe/Moscow
 
 logging:

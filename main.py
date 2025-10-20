@@ -11,6 +11,7 @@ import contextlib
 import logging
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -36,14 +37,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "mode",
         nargs="?",
-        choices=["listener", "processor", "all"],
+        choices=["listener", "processor", "reels", "all"],
         default="all",
         help="Режим работы бота",
     )
     parser.add_argument(
         "--profile",
         dest="profile",
-        help="Имя профиля конфигурации (например, marketplace или ai)",
+        help="Имя профиля конфигурации (например, marketplace, ai, reels)",
     )
     return parser.parse_args(argv)
 
@@ -134,6 +135,23 @@ async def run_processor_mode(config: Config | None = None):
         )
         logger.setLevel(getattr(logging, config.log_level.upper(), logging.INFO))
 
+    # Используем отдельный session файл для processor, чтобы избежать конфликта с listener
+    # Заменяем последний "/session" на "/processor" в пути к session файлу
+    original_session = config.get("telegram.session_name", "")
+    if original_session:
+        if original_session.endswith("/session"):
+            # Путь типа "./sessions/marketplace/session"
+            processor_session = original_session[:-8] + "/processor"  # убираем "/session", добавляем "/processor"
+        elif original_session.endswith("session"):
+            # Путь типа "./sessions/marketplace/session" (без слеша)
+            processor_session = original_session[:-7] + "processor"
+        else:
+            # Неожиданный формат - добавим "_processor" к имени
+            processor_session = original_session + "_processor"
+
+        config.config["telegram"]["session_name"] = processor_session
+        logger.info(f"📝 Использую отдельную сессию для processor: {processor_session}")
+
     logger.info("=" * 80)
     logger.info("⚙️  ЗАПУСК PROCESSOR - News Bot")
     logger.info("=" * 80)
@@ -146,17 +164,60 @@ async def run_processor_mode(config: Config | None = None):
     await processor.run()
 
 
+async def run_reels_mode(config: Config | None = None):
+    """Запуск Reels Generator (генерация сценариев из новостей)"""
+    config = config or get_container().config
+    configure_logging(
+        level=config.log_level,
+        log_file=config.log_file,
+        rotation=config.log_rotation,
+        file_format=config.log_format,
+        date_format=config.log_date_format,
+    )
+    logger.setLevel(getattr(logging, config.log_level.upper(), logging.INFO))
+
+    logger.info("=" * 80)
+    logger.info("🎬 ЗАПУСК REELS GENERATOR")
+    logger.info("=" * 80)
+
+    from reels.services.reels_processor import ReelsProcessor
+
+    processor = ReelsProcessor(config)
+    await processor.run()
+
+
 def schedule_processor(config):
     """Настроить расписание для processor"""
     schedule_time = config.get("processor.schedule_time", "09:00")
     timezone = config.get("processor.timezone", "Europe/Moscow")
+    profile = config.profile
 
     logger.info(f"⏰ Настройка расписания processor: каждый день в {schedule_time} ({timezone})")
 
     def run_processor_sync():
-        """Синхронная обёртка для запуска processor"""
+        """Синхронная обёртка для запуска processor через subprocess"""
         logger.info("🔄 Запуск Processor по расписанию...")
-        asyncio.run(run_processor_mode())
+        try:
+            # Запускаем processor как отдельный процесс
+            result = subprocess.run(
+                [sys.executable, __file__, "processor", "--profile", profile],
+                cwd=os.getcwd(),
+                timeout=10800,  # 3 часа timeout
+                capture_output=True,
+                text=True
+            )
+
+            if result.returncode != 0:
+                logger.error(f"❌ Processor завершился с ошибкой (код {result.returncode})")
+                if result.stderr:
+                    logger.error(f"STDERR: {result.stderr[:1000]}")
+            else:
+                logger.info("✅ Processor успешно завершён")
+
+        except subprocess.TimeoutExpired:
+            logger.error("❌ Processor превысил timeout (3 часа)")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при запуске processor: {e}", exc_info=True)
 
     schedule.every().day.at(schedule_time).do(run_processor_sync)
 
@@ -169,13 +230,34 @@ def schedule_status_reporter(config):
 
     interval_minutes = config.get("status.interval_minutes", 60)
     chat = config.get("status.chat", "Soft Status")
+    profile = config.profile
 
     logger.info(f"📊 Настройка отправки статуса: каждые {interval_minutes} минут в '{chat}'")
 
     def run_status_sync():
-        """Синхронная обёртка для отправки статуса"""
+        """Синхронная обёртка для отправки статуса через subprocess"""
         logger.info("📊 Отправка статуса по расписанию...")
-        asyncio.run(run_status_reporter(config))  # StatusReporter creates own db
+        try:
+            # Используем send_status.py для отправки статуса
+            result = subprocess.run(
+                [sys.executable, os.path.join(os.path.dirname(__file__), "send_status.py"), "--profile", profile],
+                cwd=os.getcwd(),
+                timeout=180,  # 3 минуты timeout для статуса
+                capture_output=True,
+                text=True
+            )
+
+            if result.returncode != 0:
+                logger.error(f"❌ Отправка статуса завершилась с ошибкой (код {result.returncode})")
+                if result.stderr:
+                    logger.error(f"STDERR: {result.stderr[:500]}")
+            else:
+                logger.info("✅ Статус успешно отправлен")
+
+        except subprocess.TimeoutExpired:
+            logger.error("❌ Отправка статуса превысила timeout (3 минуты)")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при отправке статуса: {e}", exc_info=True)
 
     schedule.every(interval_minutes).minutes.do(run_status_sync)
 
@@ -289,6 +371,11 @@ def main():
             # Только processor (одноразовый запуск)
             logger.info("Режим: PROCESSOR (одноразовый запуск)")
             asyncio.run(run_processor_mode(config))
+
+        elif mode == "reels":
+            # Reels Generator (генерация сценариев из новостей)
+            logger.info("Режим: REELS GENERATOR")
+            asyncio.run(run_reels_mode(config))
 
         elif mode == "all":
             # Оба режима: listener + scheduler для processor + status reporter

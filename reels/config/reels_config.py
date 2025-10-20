@@ -156,18 +156,20 @@ class ReelsConfig:
 
     @property
     def telegram_api_id(self) -> int:
-        """Telegram API ID"""
-        return self.config.api_id
+        """Telegram API ID (из переменных окружения)"""
+        import os
+        return int(os.getenv("TELEGRAM_API_ID", "0"))
 
     @property
     def telegram_api_hash(self) -> str:
-        """Telegram API Hash"""
-        return self.config.api_hash
+        """Telegram API Hash (из переменных окружения)"""
+        import os
+        return os.getenv("TELEGRAM_API_HASH", "")
 
     @property
     def telegram_session_file(self) -> str:
         """Путь к session файлу Telegram"""
-        return self.config.session_file
+        return self.config.get("telegram.session_name", "./sessions/ai/session")
 
     def validate(self) -> bool:
         """
