@@ -70,7 +70,7 @@ status:
   chat: '@SoftStatustnb'
   bot_name: AI News Bot
   interval_minutes: 30  # Статус каждые 30 минут
-  bot_token: 'STATUS_BOT_TOKEN_REDACTED'
+  bot_token: 'STATUS_BOT_TOKEN_REDACTED'  # @statusTNBbot
   timezone: Europe/Moscow
 
 logging:

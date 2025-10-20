@@ -144,7 +144,9 @@ class ReelsProcessor:
         """
 
         try:
-            rows = self.db.execute_query(query, (date_from, limit))
+            cursor = self.db.conn.cursor()
+            cursor.execute(query, (date_from, limit))
+            rows = cursor.fetchall()
 
             news_list = []
             for row in rows:
