@@ -1,0 +1,79 @@
+# Профиль конфигурации для Reels Generator
+# Генерация сценариев Instagram Reels из новостей через Perplexity API
+
+profile: reels
+
+# Переопределяем пути для профиля reels
+paths:
+  data_dir: ./data
+  logs_dir: ./logs
+  sessions_dir: ./sessions
+  db_file_pattern: "{data_dir}/{profile}_news.db"  # Используем БД из другого профиля
+  log_file_pattern: "{logs_dir}/{profile}/reels.log"
+  session_file_pattern: "{sessions_dir}/{profile}/session"
+
+# Telegram настройки (используем AI профиль для отправки)
+telegram:
+  api_id: ${TELEGRAM_API_ID}
+  api_hash: ${TELEGRAM_API_HASH}
+  phone: ${AI_TELEGRAM_PHONE}
+  session_name: "./sessions/ai/session"  # Используем существующую сессию AI
+
+# Perplexity API настройки
+perplexity:
+  api_key: ${PERPLEXITY_API_KEY}
+  model: sonar-pro
+  base_url: https://api.perplexity.ai
+  timeout: 60
+  max_retries: 3
+
+# Настройки обработки новостей для Reels
+reels_processor:
+  source: database  # database | file
+  news_limit: 10    # Количество новостей для обработки
+  filter_by_category: []  # Фильтр по категориям (пусто = все)
+
+  # Пути к промптам
+  prompts:
+    enrich_news: reels/prompts/enrich_news.md
+    generate_reels: reels/prompts/generate_reels.md
+
+  # Авто-запуск после processor
+  auto_run_after_processor: false  # true = автоматически после обработки новостей
+
+  # Выбор новостей из БД
+  db_source:
+    profile: ai  # Использовать БД из профиля ai
+    table: published  # Таблица с опубликованными новостями
+    days_back: 1  # Брать новости за последний N дней
+
+# Вывод результатов
+output:
+  # Отправка в Telegram
+  telegram:
+    enabled: true
+    channel: ${AI_MY_PERSONAL_ACCOUNT}  # Куда отправлять сценарии
+    format: detailed  # detailed | compact
+
+  # Сохранение в файлы (опционально)
+  file:
+    enabled: false
+    path: ./data/reels_output
+    formats: [json]  # json | markdown
+
+# Логирование
+logging:
+  level: INFO
+  log_tokens: true  # Логировать использование токенов Perplexity
+  log_file: ./logs/reels/reels.log
+  rotation: daily
+  retention_days: 30
+
+# Публикация (наследуем из base.yaml, но не используем)
+publication:
+  channel: ""
+  preview_channel: ""
+
+# Модерация (не используется для reels, но требуется для совместимости)
+moderation:
+  enabled: false
