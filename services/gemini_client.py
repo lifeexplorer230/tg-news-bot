@@ -516,7 +516,9 @@ class GeminiClient:
 
             # Сохраняем результат в кэш
             result = selected[:top_n]
-            self._response_cache.set(messages, cache_params, result)
+            # Комбинируем messages и cache_params для создания уникального ключа
+            cache_key = {"messages": messages, "params": cache_params}
+            self._response_cache.set(cache_key, result)
             logger.debug("Результат сохранен в кэш")
 
             return result

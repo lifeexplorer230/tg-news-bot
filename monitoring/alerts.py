@@ -406,10 +406,14 @@ def get_alert_manager() -> AlertManager | None:
     return _alert_manager
 
 
+# Алиас для обратной совместимости
+AlertSystem = AlertManager
+
 __all__ = [
     "AlertLevel",
     "Alert",
     "AlertManager",
+    "AlertSystem",  # Алиас
     "init_alert_manager",
     "get_alert_manager",
 ]

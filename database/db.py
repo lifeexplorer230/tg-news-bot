@@ -13,7 +13,7 @@ import numpy as np
 
 from utils.logger import setup_logger
 from utils.timezone import get_timezone, now_in_timezone, now_msk, now_utc, to_utc
-from database.connection_pool import DatabaseConnectionPool
+from database.connection_pool import ConnectionPool
 
 logger = setup_logger(__name__)
 
@@ -74,9 +74,9 @@ class Database:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
         # Используем connection pool вместо одного соединения
-        self._pool = DatabaseConnectionPool(
-            db_path=db_path,
-            pool_size=5,  # 5 соединений в пуле
+        self._pool = ConnectionPool(
+            db_path,
+            max_connections=5,  # 5 соединений в пуле
             timeout=timeout,
             busy_timeout_ms=busy_timeout_ms
         )
