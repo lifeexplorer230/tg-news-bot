@@ -12,7 +12,7 @@ from services.embeddings import EmbeddingService
 from services.gemini_client import GeminiClient
 from utils.config import Config
 from utils.logger import get_logger
-from utils.rate_limiter import RateLimiter
+from utils.advanced_rate_limiter import MultiLevelRateLimiter, AdaptiveRateLimiter
 from utils.telegram_helpers import safe_connect
 from utils.timezone import now_msk
 
@@ -33,9 +33,10 @@ class NewsProcessor:
         self._embedding_service: EmbeddingService | None = None
         self._gemini_client: GeminiClient | None = None
 
-        # Security: Rate limiter для защиты от Telegram API limits
-        # 20 сообщений в минуту в одну группу (по документации Telegram)
-        self._rate_limiter = RateLimiter(max_requests=20, per_seconds=60)
+        # Security: Многоуровневый rate limiter для защиты от Telegram API limits
+        # Включает global limits, burst protection, per-chat limits
+        base_limiter = MultiLevelRateLimiter()
+        self._rate_limiter = AdaptiveRateLimiter(base_limiter)
 
         # Кэш для оптимизации (CR-H1)
         self._cached_published_embeddings: list[tuple[int, any]] | None = None
@@ -1317,21 +1318,37 @@ class NewsProcessor:
         if preview_channel:
             try:
                 # Security: Rate limiting для защиты от Telegram API ban
-                await self._rate_limiter.acquire()
+                # Получаем ID канала для per-chat limiting
+                preview_entity = await client.get_entity(preview_channel)
+                await self._rate_limiter.acquire(
+                    chat_id=preview_entity.id,
+                    endpoint="send_message",
+                    priority=1  # Preview имеет средний приоритет
+                )
                 await client.send_message(preview_channel, digest)
                 logger.info("📄 Черновик дайджеста отправлен в %s", preview_channel)
             except Exception as exc:  # noqa: BLE001
                 logger.error("Не удалось отправить превью в %s: %s", preview_channel, exc)
 
-        # Публикуем
-        await self._rate_limiter.acquire()
+        # Публикуем в основной канал
+        target_entity = await client.get_entity(target_channel)
+        await self._rate_limiter.acquire(
+            chat_id=target_entity.id,
+            endpoint="send_message",
+            priority=2  # Публикация имеет высокий приоритет
+        )
         await client.send_message(target_channel, digest)
         logger.info(f"✅ Дайджест опубликован в {target_channel}")
 
         notify_account = (self.publication_notify_account or "").strip()
         if notify_account:
             try:
-                await self._rate_limiter.acquire()
+                notify_entity = await client.get_entity(notify_account)
+                await self._rate_limiter.acquire(
+                    chat_id=notify_entity.id,
+                    endpoint="send_message",
+                    priority=0  # Уведомление имеет низкий приоритет
+                )
                 await client.send_message(
                     notify_account,
                     f"✅ Дайджест на {context['date']} опубликован в {target_channel}",

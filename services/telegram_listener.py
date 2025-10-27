@@ -13,6 +13,7 @@ from utils.config import Config
 from utils.logger import setup_logger
 from utils.telegram_helpers import safe_connect
 from utils.timezone import now_utc
+from utils.sanitization import sanitize_text, sanitize_channel_name, is_safe_for_storage
 
 logger = setup_logger(__name__)
 
@@ -251,16 +252,20 @@ class TelegramListener:
             if not message.text:
                 return
 
-            text = message.text.strip()
+            # Санитизация текста сообщения
+            text = sanitize_text(message.text, max_length=self.MAX_MESSAGE_SIZE)
 
-            # Security: Валидация размера сообщения для защиты от DoS
-            if len(text) > self.MAX_MESSAGE_SIZE:
+            # Проверка безопасности перед сохранением
+            if not is_safe_for_storage(text):
                 logger.warning(
-                    "Сообщение слишком большое: %d байт (макс: %d). Канал: %s",
-                    len(text),
-                    self.MAX_MESSAGE_SIZE,
+                    "Сообщение содержит опасный контент. Канал: %s",
                     event.chat_id,
                 )
+                return
+
+            # Security: Дополнительная проверка размера после санитизации
+            if len(text) < 10:  # Слишком короткое после очистки
+                logger.debug("Сообщение слишком короткое после санитизации")
                 return
 
             # Фильтры
@@ -279,13 +284,14 @@ class TelegramListener:
 
             # Получаем информацию о канале
             chat = await event.get_chat()
-            username = chat.username or str(chat.id)
+            username = sanitize_channel_name(chat.username or str(chat.id))
+            channel_title = sanitize_channel_name(chat.title or username)
 
             # QA-3: Получаем channel_id из БД неблокирующим способом
             channel_id = await asyncio.to_thread(self.db.get_channel_id, username)
             if not channel_id:
                 # Если канала нет в БД (странно), добавляем
-                channel_id = await asyncio.to_thread(self.db.add_channel, username, chat.title)
+                channel_id = await asyncio.to_thread(self.db.add_channel, username, channel_title)
 
             # QA-3: Сохраняем сообщение неблокирующим способом
             has_media = message.media is not None
