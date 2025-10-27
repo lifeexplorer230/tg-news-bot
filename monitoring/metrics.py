@@ -443,11 +443,19 @@ def timer(name: str, labels: dict[str, str] | None = None, help_text: str = ""):
     return get_metrics_collector().timer(name, labels, help_text)
 
 
+# Алиасы для удобства использования
+Counter = CounterMetric
+Gauge = GaugeMetric
+Histogram = HistogramMetric
+
 __all__ = [
     "MetricValue",
     "CounterMetric",
     "GaugeMetric",
     "HistogramMetric",
+    "Counter",  # Алиас
+    "Gauge",    # Алиас
+    "Histogram", # Алиас
     "MetricsCollector",
     "get_metrics_collector",
     "counter",
