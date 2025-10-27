@@ -1,0 +1,71 @@
+# Конфигурация системы мониторинга
+
+monitoring:
+  # Алерты
+  alerts:
+    enabled: true
+    target_chat: "Soft Status"  # Чат для отправки алертов
+    bot_name: "News Bot"        # Имя бота в сообщениях
+
+    # Rate limits (можно настроить под свои нужды)
+    rate_limits:
+      info:
+        max_per_hour: 10
+        min_interval_seconds: 60
+      warning:
+        max_per_hour: 20
+        min_interval_seconds: 30
+      error:
+        max_per_hour: 50
+        min_interval_seconds: 10
+      critical:
+        max_per_hour: 100
+        min_interval_seconds: 5
+
+  # Метрики
+  metrics:
+    enabled: true
+    # Экспорт метрик будет доступен через /metrics endpoint
+
+  # Health Check
+  healthcheck:
+    enabled: true
+    port: 8080  # Порт для HTTP сервера
+    host: "0.0.0.0"
+
+    # Проверки
+    checks:
+      database: true
+      telegram_api: true
+      gemini_api: true
+      disk_space: true
+      memory: true
+      listener_heartbeat: true
+
+    # Пороги
+    thresholds:
+      disk_warning_percent: 20.0    # < 20% свободно - warning
+      disk_critical_percent: 10.0   # < 10% свободно - critical
+      memory_warning_percent: 20.0
+      memory_critical_percent: 10.0
+
+    # Таймауты
+    check_timeout_seconds: 10.0
+
+# Интеграция с существующими сервисами
+listener:
+  # ... existing listener config ...
+  monitoring:
+    send_alerts: true
+    alert_on_start: true
+    alert_on_error: true
+    alert_on_stop: true
+
+processor:
+  # ... existing processor config ...
+  monitoring:
+    collect_metrics: true
+    send_alerts: true
+    alert_on_start: true
+    alert_on_error: true
+    alert_on_completion: true
