@@ -21,6 +21,8 @@ from tenacity import (
 )
 
 from utils.logger import setup_logger
+from utils.circuit_breaker import ServiceCircuitBreakers, circuit_breaker
+from services.gemini_cache import GeminiCache
 
 
 class NewsItem(BaseModel):
@@ -277,6 +279,13 @@ class GeminiClient:
         self._prompt_loader = prompt_loader
         self._prompt_cache: dict[str, str] = {}
 
+        # Инициализация кэша для ответов
+        self._response_cache = GeminiCache(
+            ttl_hours=24,  # Кэш на 24 часа
+            max_size=1000  # Максимум 1000 записей
+        )
+        logger.info("Инициализирован кэш для Gemini ответов")
+
     def _ensure_model(self) -> genai.GenerativeModel:
         if self._model is not None:
             return self._model
@@ -453,6 +462,13 @@ class GeminiClient:
         if not messages:
             return []
 
+        # Проверяем кэш
+        cache_params = {"top_n": top_n}
+        cached_result = self._response_cache.get(messages, cache_params)
+        if cached_result is not None:
+            logger.info("Gemini ответ получен из кэша")
+            return cached_result
+
         # Формируем промпт
         messages_block = self._build_messages_block(messages)
 
@@ -466,7 +482,12 @@ class GeminiClient:
         try:
             start_time = time.time()
             model = self._ensure_model()
-            response = model.generate_content(prompt)
+
+            # Используем Circuit Breaker для защиты от сбоев API
+            response = ServiceCircuitBreakers.gemini_api.call(
+                model.generate_content,
+                prompt
+            )
             result_text = response.text.strip()
             duration = time.time() - start_time
 
@@ -492,7 +513,13 @@ class GeminiClient:
 
             selected = json.loads(result_text)
             logger.info(f"Gemini отобрал {len(selected)} новостей из {len(messages)}")
-            return selected[:top_n]
+
+            # Сохраняем результат в кэш
+            result = selected[:top_n]
+            self._response_cache.set(messages, cache_params, result)
+            logger.debug("Результат сохранен в кэш")
+
+            return result
 
         except json.JSONDecodeError as e:
             logger.error(f"Ошибка парсинга JSON от Gemini: {e}")

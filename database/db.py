@@ -13,6 +13,7 @@ import numpy as np
 
 from utils.logger import setup_logger
 from utils.timezone import get_timezone, now_in_timezone, now_msk, now_utc, to_utc
+from database.connection_pool import DatabaseConnectionPool
 
 logger = setup_logger(__name__)
 
@@ -71,19 +72,31 @@ class Database:
         self._retry_base_delay = max(0.0, float(retry_base_delay))
         self._retry_backoff_multiplier = max(0.0, float(retry_backoff_multiplier)) or 1.0
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self.conn: sqlite3.Connection | None = None
+
+        # Используем connection pool вместо одного соединения
+        self._pool = DatabaseConnectionPool(
+            db_path=db_path,
+            pool_size=5,  # 5 соединений в пуле
+            timeout=timeout,
+            busy_timeout_ms=busy_timeout_ms
+        )
+
+        self.conn: sqlite3.Connection | None = None  # Для обратной совместимости
         self._lock = threading.Lock()  # Thread safety для write operations
         self._closed = False  # Track if connection was explicitly closed
         self.init_db()
 
     def connect(self):
-        """Подключение к базе данных"""
-        # Увеличенный timeout для работы с параллельным доступом
-        self.conn = sqlite3.connect(self.db_path, timeout=self._timeout, check_same_thread=False)
-        self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute(f"PRAGMA busy_timeout={self._busy_timeout_ms}")
-        self.conn.row_factory = sqlite3.Row  # Для доступа по именам столбцов
+        """Подключение к базе данных (для обратной совместимости)"""
+        # Для совместимости с существующим кодом
+        # В новом коде лучше использовать get_connection()
+        if self.conn is None:
+            self.conn = self._pool._create_connection()
         return self.conn
+
+    def get_connection(self):
+        """Получить соединение из пула (рекомендуемый метод)"""
+        return self._pool.get_connection()
 
     def init_db(self):
         """Создание таблиц если их нет"""
