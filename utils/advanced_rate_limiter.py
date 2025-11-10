@@ -248,9 +248,6 @@ class MultiLevelRateLimiter:
             f"(adjusted: {adjusted_wait:.1f}s, multiplier: {multiplier:.1f})"
         )
 
-        # Ждем
-        await asyncio.sleep(adjusted_wait)
-
     def get_stats(self) -> dict:
         """Получить статистику rate limiter'а"""
         stats = self.stats.copy()
@@ -312,12 +309,6 @@ class AdaptiveRateLimiter:
 
     async def _get_adjusted_wait(self, **kwargs) -> float:
         """Вычислить адаптированное время ожидания"""
-        # Если success rate низкий, увеличиваем задержки
-        if self.success_rate < 0.9:
-            self.adjustment_factor = min(self.adjustment_factor * 1.1, 2.0)
-        elif self.success_rate > 0.95:
-            self.adjustment_factor = max(self.adjustment_factor * 0.95, 0.5)
-
         # Базовая задержка с учетом adjustment
         base_delay = 0.033 * self.adjustment_factor  # ~30 req/sec adjusted
 
@@ -330,6 +321,13 @@ class AdaptiveRateLimiter:
         # Пересчитываем success rate
         if len(self.request_history) >= 10:
             self.success_rate = sum(self.request_history) / len(self.request_history)
+
+            # Обновляем adjustment_factor на основе success_rate
+            # Если success rate низкий, увеличиваем задержки
+            if self.success_rate < 0.9:
+                self.adjustment_factor = min(self.adjustment_factor * 1.1, 2.0)
+            elif self.success_rate > 0.95:
+                self.adjustment_factor = max(self.adjustment_factor * 0.95, 0.5)
 
     def get_status(self) -> dict:
         """Получить статус адаптивного limiter'а"""

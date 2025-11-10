@@ -250,8 +250,8 @@ class TestDatabaseSecurity:
             assert isinstance(channels, list)
 
             # Проверяем что данные сохранились корректно (экранированы)
-            channel = db.get_channel_by_username(malicious)
-            assert channel is not None
+            channel_id_check = db.get_channel_id(malicious)
+            assert channel_id_check == channel_id  # Проверяем что можем найти по username
 
     def test_database_handles_unicode(self):
         """Проверка обработки Unicode в базе данных"""
@@ -410,17 +410,26 @@ class TestRateLimiting:
         """Тест приоритетов в rate limiter"""
         limiter = MultiLevelRateLimiter()
 
+        # Создаём ситуацию с реальной задержкой (FloodWait)
+        await limiter.handle_flood_wait(1, "test_endpoint")
+
         # Высокоприоритетный запрос должен ждать меньше
         start = time.monotonic()
-        await limiter.acquire(priority=2)  # Критический
+        await limiter.acquire(endpoint="test_endpoint", priority=2)  # Критический
         high_priority_time = time.monotonic() - start
 
+        # Сбрасываем FloodWait для второго теста
+        await limiter.handle_flood_wait(1, "test_endpoint2")
+
         start = time.monotonic()
-        await limiter.acquire(priority=0)  # Обычный
+        await limiter.acquire(endpoint="test_endpoint2", priority=0)  # Обычный
         normal_priority_time = time.monotonic() - start
 
-        # Высокий приоритет должен выполняться быстрее
-        assert high_priority_time <= normal_priority_time
+        # Высокий приоритет должен ждать меньше
+        # priority=2: wait * (1/(2+1)) = wait * 0.33
+        # priority=0: wait * 1.0
+        # Поэтому high_priority_time должно быть примерно в 3 раза меньше
+        assert high_priority_time < normal_priority_time * 0.9  # С небольшим допуском
 
 
 class TestIntegrationSecurity:
@@ -439,35 +448,45 @@ class TestIntegrationSecurity:
         mock_config.telegram_phone = "+79991234567"
         mock_config.db_path = ":memory:"
         mock_config.database_settings.return_value = {}
-        mock_config.get.return_value = []
+        mock_config.get.side_effect = lambda key, default=None: {
+            "telegram.session_name": "test_session",
+            "listener.channel_whitelist": [],
+            "listener.channel_blacklist": [],
+            "listener.min_message_length": 50,
+            "listener.exclude_keywords": [],
+        }.get(key, default)
 
-        # Создаем listener
-        listener = TelegramListener(mock_config)
+        # Мокаем TelegramClient
+        with patch("services.telegram_listener.TelegramClient") as mock_telegram_client:
+            mock_telegram_client.return_value = MagicMock()
 
-        # Мокаем event с опасным сообщением
-        mock_event = MagicMock()
-        mock_event.message.text = "Test\x00message'; DROP TABLE channels; --<script>alert(1)</script>"
-        mock_event.message.date = asyncio.get_event_loop().time()
+            # Создаем listener
+            listener = TelegramListener(mock_config)
 
-        mock_chat = AsyncMock()
-        mock_chat.username = "test_channel\x00"
-        mock_chat.title = "Test Channel<script>"
-        mock_chat.id = 12345
-        mock_event.get_chat = AsyncMock(return_value=mock_chat)
+            # Мокаем event с опасным сообщением
+            mock_event = MagicMock()
+            mock_event.message.text = "Test\x00message'; DROP TABLE channels; --<script>alert(1)</script>"
+            mock_event.message.date = asyncio.get_event_loop().time()
 
-        # Обрабатываем сообщение
-        with patch.object(listener, 'db') as mock_db:
-            mock_db.get_channel_id = AsyncMock(return_value=1)
-            mock_db.save_raw_message = AsyncMock(return_value=1)
+            mock_chat = AsyncMock()
+            mock_chat.username = "test_channel\x00"
+            mock_chat.title = "Test Channel<script>"
+            mock_chat.id = 12345
+            mock_event.get_chat = AsyncMock(return_value=mock_chat)
 
-            await listener.handle_new_message(mock_event)
+            # Обрабатываем сообщение
+            with patch.object(listener, 'db') as mock_db:
+                mock_db.get_channel_id = AsyncMock(return_value=1)
+                mock_db.save_raw_message = AsyncMock(return_value=1)
 
-            # Проверяем что текст был санитизирован
-            call_args = mock_db.save_raw_message.call_args
-            if call_args:
-                saved_text = call_args[0][0] if call_args[0] else call_args[1].get('text')
-                if saved_text:
-                    assert '\x00' not in saved_text
+                await listener.handle_new_message(mock_event)
+
+                # Проверяем что текст был санитизирован
+                call_args = mock_db.save_raw_message.call_args
+                if call_args:
+                    saved_text = call_args[0][0] if call_args[0] else call_args[1].get('text')
+                    if saved_text:
+                        assert '\x00' not in saved_text
                     assert '<script>' not in saved_text
 
 
