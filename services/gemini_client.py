@@ -882,6 +882,11 @@ class GeminiClient:
             chunk_results = self._process_category_chunk(chunk, marketplace, top_n, display_name)
             all_selected.extend(chunk_results)
 
+            # Rate limiting: пауза между чанками для соблюдения квоты TPM (32K/min Free Tier)
+            if i < len(chunks):
+                logger.info(f"⏱️  Rate limiting: пауза 60 секунд перед следующим чанком ({i+1}/{len(chunks)})")
+                time.sleep(60)
+
         # Сортируем по score и берем top_n
         all_selected.sort(key=lambda x: x.get("score", 0), reverse=True)
         final_results = all_selected[:top_n]
@@ -1221,6 +1226,11 @@ class GeminiClient:
             for category_name in category_counts.keys():
                 all_categories[category_name].extend(chunk_results.get(category_name, []))
 
+            # Rate limiting: пауза между чанками для соблюдения квоты TPM (32K/min Free Tier)
+            if i < len(chunks):
+                logger.info(f"⏱️  Rate limiting: пауза 60 секунд перед следующим чанком ({i+1}/{len(chunks)})")
+                time.sleep(60)
+
         # НОВАЯ ЛОГИКА: Глобальная сортировка по score (приоритет > категории)
         # Объединяем все новости из всех категорий
         all_news = []
@@ -1356,6 +1366,11 @@ class GeminiClient:
             # Объединяем результаты по категориям
             for category_name in ["wildberries", "ozon", "general"]:
                 all_categories[category_name].extend(chunk_results.get(category_name, []))
+
+            # Rate limiting: пауза между чанками для соблюдения квоты TPM (32K/min Free Tier)
+            if i < len(chunks):
+                logger.info(f"⏱️  Rate limiting: пауза 60 секунд перед следующим чанком ({i+1}/{len(chunks)})")
+                time.sleep(60)
 
         # Сортируем каждую категорию по score
         all_categories["wildberries"].sort(key=lambda x: x.get("score", 0), reverse=True)
