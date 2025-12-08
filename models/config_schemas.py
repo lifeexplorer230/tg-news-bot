@@ -200,8 +200,10 @@ class ModerationConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    enabled: bool = Field(default=True, description="Включить модерацию")
-    timeout_hours: int = Field(default=2, ge=1, le=24, description="Таймаут модерации")
+    auto: bool = Field(default=True, description="Автоматическая модерация (без участия человека)")
+    enabled: bool = Field(default=False, description="Ручная модерация (legacy)")
+    final_top_n: int = Field(default=10, ge=1, le=50, description="Финальное количество новостей после модерации")
+    timeout_hours: int = Field(default=2, ge=1, le=24, description="Таймаут модерации (для ручной)")
     instructions_template: str = Field(default="default", description="Шаблон инструкций")
     cancel_keywords: List[str] = Field(
         default_factory=lambda: ["отмена", "cancel"], description="Keywords отмены"

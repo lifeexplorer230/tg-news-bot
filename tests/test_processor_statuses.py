@@ -71,7 +71,7 @@ class FakeClient:
         return [mock_message]
 
 
-def make_processor(messages, moderation_enabled=False):
+def make_processor(messages, moderation_enabled=False, auto_moderation=False):
     processor = NewsProcessor.__new__(NewsProcessor)
     processor.config = SimpleNamespace(my_personal_account="tester")
     processor.db = FakeDB(messages)
@@ -84,6 +84,11 @@ def make_processor(messages, moderation_enabled=False):
     processor._cached_published_embeddings = None
     processor._published_embeddings_matrix = None
     processor._published_embeddings_ids = None
+    processor._auto_moderator = None
+
+    # Auto moderation settings
+    processor.auto_moderation = auto_moderation
+    processor.final_top_n = 10
 
     processor.global_exclude_keywords = ["spam"]
     processor.categories = {

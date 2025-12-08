@@ -179,6 +179,10 @@ class Database:
         """
         )
 
+        # Миграция: удаляем дубликаты и добавляем UNIQUE constraint на source_message_id
+        # Это предотвращает публикацию одного сообщения дважды
+        self._migrate_published_unique_constraint(cursor)
+
         # Таблица конфигурации
         cursor.execute(
             """
@@ -191,6 +195,58 @@ class Database:
 
         conn.commit()
         logger.info(f"База данных инициализирована: {self.db_path}")
+
+    def _migrate_published_unique_constraint(self, cursor: sqlite3.Cursor):
+        """
+        Миграция: добавить UNIQUE constraint на (source_message_id, source_channel_id)
+
+        Это предотвращает публикацию одного сообщения дважды.
+        Миграция идемпотентна - можно запускать многократно.
+        """
+        # Проверяем, существует ли уже индекс
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_published_source_unique'"
+        )
+        if cursor.fetchone():
+            # Индекс уже существует, миграция не нужна
+            return
+
+        logger.info("🔄 Запуск миграции: добавление UNIQUE constraint на published")
+
+        # Подсчитываем дубликаты перед удалением
+        cursor.execute("""
+            SELECT COUNT(*) FROM published
+            WHERE id NOT IN (
+                SELECT MAX(id) FROM published
+                WHERE source_message_id IS NOT NULL
+                GROUP BY source_message_id, source_channel_id
+            )
+            AND source_message_id IS NOT NULL
+        """)
+        duplicate_count = cursor.fetchone()[0]
+
+        if duplicate_count > 0:
+            logger.warning(f"⚠️ Найдено {duplicate_count} дубликатов в published, удаляем...")
+
+            # Удаляем дубликаты, оставляя только последнюю запись для каждой пары
+            cursor.execute("""
+                DELETE FROM published
+                WHERE id NOT IN (
+                    SELECT MAX(id) FROM published
+                    WHERE source_message_id IS NOT NULL
+                    GROUP BY source_message_id, source_channel_id
+                )
+                AND source_message_id IS NOT NULL
+            """)
+            logger.info(f"✅ Удалено {duplicate_count} дубликатов")
+
+        # Создаём уникальный индекс
+        cursor.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_published_source_unique
+            ON published(source_message_id, source_channel_id)
+            WHERE source_message_id IS NOT NULL
+        """)
+        logger.info("✅ Создан UNIQUE индекс idx_published_source_unique")
 
     # ====== РАБОТА С КАНАЛАМИ ======
 
@@ -402,6 +458,9 @@ class Database:
         """
         Сохранить опубликованный пост
 
+        Использует INSERT OR IGNORE для предотвращения дублирования
+        (защита на уровне БД через UNIQUE индекс на source_message_id, source_channel_id)
+
         Args:
             text: Текст поста
             embedding: Embedding для проверки дубликатов
@@ -409,7 +468,7 @@ class Database:
             source_channel_id: ID канала-источника
 
         Returns:
-            ID записи
+            ID записи или -1 если запись уже существует (дубликат)
         """
         with self._lock:  # Sprint 6.2: Thread-safe доступ
             cursor = self.conn.cursor()
@@ -420,13 +479,20 @@ class Database:
 
             cursor.execute(
                 """
-                INSERT INTO published
+                INSERT OR IGNORE INTO published
                 (text, embedding, source_message_id, source_channel_id)
                 VALUES (?, ?, ?, ?)
             """,
                 (text, embedding_bytes, source_message_id, source_channel_id),
             )
             self.conn.commit()
+
+            if cursor.rowcount == 0:
+                logger.warning(
+                    f"⚠️ Дубликат пропущен в save_published: "
+                    f"source_message_id={source_message_id}, source_channel_id={source_channel_id}"
+                )
+                return -1
             return cursor.lastrowid
 
     def get_published_embeddings(self, days: int = 60) -> list[tuple[int, np.ndarray]]:

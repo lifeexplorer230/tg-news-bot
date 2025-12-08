@@ -43,8 +43,8 @@ processor:
   exclude_count: 5
 
 moderation:
-  enabled: true
-  timeout_hours: 2
+  auto: true                 # Полностью автоматическая модерация
+  enabled: false             # Ручная модерация отключена
 
 cleanup:
   raw_messages_days: 14
