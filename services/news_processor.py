@@ -10,6 +10,7 @@ from database.db import Database
 from models.category import Category
 from services.embeddings import EmbeddingService
 from services.gemini_client import GeminiClient
+from services.auto_moderator import AutoModerator, ModerationResult
 from utils.config import Config
 from utils.logger import get_logger
 from utils.advanced_rate_limiter import MultiLevelRateLimiter, AdaptiveRateLimiter
@@ -132,8 +133,27 @@ class NewsProcessor:
                 self.processor_exclude_count,
             )
             self.processor_exclude_count = 5
+        # Настройки модерации
+        # auto_moderation: True = полностью автоматически, False = с ручным подтверждением
+        self.auto_moderation = config.get("moderation.auto", True)
         self.moderation_enabled = config.get("moderation.enabled", True)
         self.moderation_timeout_hours = config.get("moderation.timeout_hours", 2)
+        # final_top_n: финальное количество новостей после модерации (по умолчанию 10)
+        self.final_top_n = config.get("moderation.final_top_n", 10)
+
+        # Кэш для AutoModerator
+        self._auto_moderator: AutoModerator | None = None
+
+    @property
+    def auto_moderator(self) -> AutoModerator:
+        """Ленивая инициализация автомодератора"""
+        if self._auto_moderator is None:
+            self._auto_moderator = AutoModerator(
+                embeddings_service=self.embeddings,
+                duplicate_threshold=self.duplicate_threshold,
+                final_top_n=self.final_top_n,  # Используем отдельную настройку (по умолчанию 10)
+            )
+        return self._auto_moderator
 
     @property
     def embeddings(self) -> EmbeddingService:
@@ -296,8 +316,9 @@ class NewsProcessor:
         """
         Дедупликация отобранных Gemini новостей перед модерацией
 
-        Gemini получает инструкции по дедупликации через промпт и должен отбирать разные новости.
-        Этот метод - дополнительная защита от ОЧЕНЬ похожих новостей на случай ошибки AI.
+        Двухэтапная дедупликация:
+        1. Точная дедупликация по source_message_id (один raw_message не может быть выбран дважды)
+        2. Семантическая дедупликация по embeddings (похожие новости из разных источников)
 
         Args:
             posts: Список новостей после отбора Gemini (с title, description)
@@ -309,23 +330,48 @@ class NewsProcessor:
         if not posts:
             return [], []
 
-        unique = []
         duplicates = []
+
+        # ЭТАП 1: Точная дедупликация по source_message_id
+        # Gemini может вернуть одно сообщение несколько раз (из разных чанков или категорий)
+        seen_source_ids: set[int] = set()
+        unique_by_id = []
+        id_duplicates = 0
+
+        for post in posts:
+            source_id = post.get("source_message_id")
+            if source_id is not None and source_id in seen_source_ids:
+                duplicates.append(post)
+                id_duplicates += 1
+                logger.debug(
+                    f"🔍 Дубликат по source_message_id={source_id}: '{post.get('title', '')[:40]}...'"
+                )
+                continue
+            if source_id is not None:
+                seen_source_ids.add(source_id)
+            unique_by_id.append(post)
+
+        if id_duplicates > 0:
+            logger.info(f"🔍 Удалено {id_duplicates} дубликатов по source_message_id")
+
+        # ЭТАП 2: Семантическая дедупликация по embeddings
+        unique = []
         seen_embeddings = []
 
         # Создаём embeddings для каждого поста
         # Используем title + description для более точной проверки
         texts = [
             f"{post.get('title', '')} {post.get('description', '')}"
-            for post in posts
+            for post in unique_by_id
         ]
         embeddings_array = await self.embeddings.encode_batch_async(texts, batch_size=32)
 
         logger.debug(
-            f"Post-Gemini дедупликация: проверяем {len(posts)} новостей (порог={threshold})"
+            f"Post-Gemini семантическая дедупликация: проверяем {len(unique_by_id)} новостей (порог={threshold})"
         )
 
-        for post, embedding in zip(posts, embeddings_array):
+        semantic_duplicates = 0
+        for post, embedding in zip(unique_by_id, embeddings_array):
             if not seen_embeddings:
                 # Первый пост всегда уникален
                 unique.append(post)
@@ -340,9 +386,10 @@ class NewsProcessor:
             if max_similarity >= threshold:
                 # Найден дубликат среди отобранных Gemini новостей
                 duplicates.append(post)
+                semantic_duplicates += 1
                 duplicate_idx = np.argmax(similarities)
                 logger.info(
-                    f"🔍 Post-Gemini дубликат: '{post.get('title', '')[:50]}...' "
+                    f"🔍 Post-Gemini семантический дубликат: '{post.get('title', '')[:50]}...' "
                     f"похожа на #{duplicate_idx+1} (similarity={max_similarity:.3f})"
                 )
             else:
@@ -352,7 +399,7 @@ class NewsProcessor:
 
         logger.info(
             f"✅ Post-Gemini дедупликация: {len(unique)} уникальных, "
-            f"{len(duplicates)} дубликатов удалено"
+            f"{len(duplicates)} дубликатов удалено ({id_duplicates} по ID, {semantic_duplicates} семантических)"
         )
 
         return unique, duplicates
@@ -600,22 +647,49 @@ class NewsProcessor:
             f"({len(post_duplicates)} дубликатов удалено)"
         )
 
-        # ШАГ 5: Модерация (выбор 10 из 15)
-        if self.moderation_enabled:
+        # ШАГ 5: Автоматическая модерация (финальная дедупликация + топ-N)
+        # Собираем все посты из категорий в единый список
+        all_posts = [post for posts in categories.values() for post in posts]
+
+        if self.auto_moderation:
+            # АВТОМАТИЧЕСКИЙ РЕЖИМ: без участия человека
+            logger.info("🤖 Автоматическая модерация включена")
+            moderation_result: ModerationResult = await self.auto_moderator.moderate(
+                all_posts,
+                top_n=self.final_top_n,  # Ограничиваем финальное количество (по умолчанию 10)
+            )
+            approved_posts = moderation_result.approved_posts
+
+            if not approved_posts:
+                logger.warning("Все новости отклонены автомодератором")
+                updates = [
+                    {'message_id': msg_id, 'rejection_reason': "rejected_by_auto_moderator"}
+                    for msg_id in selected_ids
+                ]
+                await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
+                return
+
+            # Обновляем причины отклонения из результата модерации
+            auto_rejection_reasons = moderation_result.rejection_reasons
+
+        elif self.moderation_enabled:
+            # РУЧНОЙ РЕЖИМ: с подтверждением от модератора (legacy)
+            logger.info("👤 Ручная модерация включена")
             approved_posts = await self.moderate_categories(client, categories)
 
             if not approved_posts:
                 logger.warning("Все новости отклонены на этапе модерации")
-                # Sprint 6.4: Батч-обработка вместо N вызовов
                 updates = [
                     {'message_id': msg_id, 'rejection_reason': "rejected_by_moderator"}
                     for msg_id in selected_ids
                 ]
                 await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
                 return
+            auto_rejection_reasons = {}
         else:
-            # Без модерации - берем все что есть (динамически для всех категорий)
-            approved_posts = [post for posts in categories.values() for post in posts]
+            # БЕЗ МОДЕРАЦИИ: берем все что есть
+            approved_posts = all_posts
+            auto_rejection_reasons = {}
 
         approved_ids = {
             post.get("source_message_id")
@@ -628,7 +702,7 @@ class NewsProcessor:
         unique_ids = {msg["id"] for msg in unique_messages}
         not_selected_ids = unique_ids - selected_ids
 
-        # ШАГ 6: 2-стадийная модерация и публикация
+        # ШАГ 6: Публикация
         target_channel = (
             self.all_digest_channel
             if self.all_digest_enabled and self.all_digest_channel
@@ -638,28 +712,37 @@ class NewsProcessor:
             )
         )
 
-        # СТАДИЯ 2: Формируем дайджест и отправляем на утверждение
-        digest_text = self._format_digest(approved_posts, target_channel)
-        moderator_username = self.config.my_personal_account
+        if self.auto_moderation:
+            # АВТОМАТИЧЕСКИЙ РЕЖИМ: сразу публикуем
+            logger.info(f"📢 Автопубликация {len(approved_posts)} новостей в {target_channel}...")
 
-        # Ждем утверждения от модератора
-        is_approved = await self._approve_digest(client, moderator_username, digest_text)
+            await self.publish_digest(
+                client,
+                approved_posts,
+                "категории",
+                target_channel,
+                display_name="Категории",
+            )
+        else:
+            # РУЧНОЙ РЕЖИМ: формируем дайджест и ждём утверждения
+            digest_text = self._format_digest(approved_posts, target_channel)
+            moderator_username = self.config.my_personal_account
 
-        if not is_approved:
-            logger.warning("❌ Модератор отменил публикацию дайджеста")
-            # НЕ помечаем сообщения как обработанные - они останутся для повторной обработки
-            return
+            is_approved = await self._approve_digest(client, moderator_username, digest_text)
 
-        # ПУБЛИКАЦИЯ: Дайджест утвержден
-        logger.info("📢 Публикация утвержденного дайджеста...")
+            if not is_approved:
+                logger.warning("❌ Модератор отменил публикацию дайджеста")
+                return
 
-        await self.publish_digest(
-            client,
-            approved_posts,
-            "категории",
-            target_channel,
-            display_name="Категории",
-        )
+            logger.info("📢 Публикация утвержденного дайджеста...")
+
+            await self.publish_digest(
+                client,
+                approved_posts,
+                "категории",
+                target_channel,
+                display_name="Категории",
+            )
 
         # ШАГ 7: Помечаем сообщения как обработанные (только после успешной публикации)
 
@@ -667,18 +750,20 @@ class NewsProcessor:
         await self._mark_messages_processed(approved_posts)
 
         # 7.2: Сообщения, которые прошли отбор Gemini, но были исключены модератором
-        updates = [
-            {'message_id': msg_id, 'rejection_reason': "rejected_by_moderator"}
-            for msg_id in rejected_after_moderation
-        ]
-        await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
+        updates = []
+        for msg_id in rejected_after_moderation:
+            reason = auto_rejection_reasons.get(msg_id, "rejected_by_moderator")
+            updates.append({'message_id': msg_id, 'rejection_reason': reason})
+        if updates:
+            await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
 
         # 7.3: Сообщения, которые Gemini не выбрал
         updates = [
             {'message_id': msg_id, 'rejection_reason': "rejected_by_llm"}
             for msg_id in not_selected_ids
         ]
-        await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
+        if updates:
+            await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
 
         # 7.4: Сообщения, отфильтрованные по ключевым словам или дубликаты
         updates = [
@@ -689,7 +774,8 @@ class NewsProcessor:
             }
             for msg_id, reason in all_rejected.items()
         ]
-        await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
+        if updates:
+            await asyncio.to_thread(self.db.mark_as_processed_batch, updates)
 
         logger.info("✅ Обработка всех категорий завершена!")
 
@@ -1198,6 +1284,38 @@ class NewsProcessor:
         return "\n".join(lines)
 
     @staticmethod
+    def _split_digest_by_limit(lines: list[str], limit: int) -> list[str]:
+        """
+        Разбивает дайджест на несколько сообщений, если превышает лимит.
+
+        Args:
+            lines: Список строк дайджеста
+            limit: Максимальная длина одного сообщения
+
+        Returns:
+            Список сообщений, каждое не превышает limit
+        """
+        parts = []
+        current_part = []
+        current_length = 0
+
+        for line in lines:
+            line_length = len(line) + 1  # +1 для \n
+            if current_length + line_length > limit and current_part:
+                # Сохраняем текущую часть и начинаем новую
+                parts.append("\n".join(current_part))
+                current_part = [line]
+                current_length = line_length
+            else:
+                current_part.append(line)
+                current_length += line_length
+
+        if current_part:
+            parts.append("\n".join(current_part))
+
+        return parts
+
+    @staticmethod
     def _ensure_post_fields(post: dict) -> dict:
         """
         QA-1: Fallback-форматирование для постов без title/description
@@ -1238,6 +1356,12 @@ class NewsProcessor:
                     post["description"] = " ".join(words[7:]) if len(words) > 7 else text
             else:
                 post["description"] = "Описание отсутствует"
+
+        # Ограничиваем длину description чтобы вместиться в лимит Telegram
+        # 10 новостей * ~350 символов = 3500 + header/footer ~500 = 4000 < 4096
+        MAX_DESCRIPTION_LENGTH = 250
+        if len(post.get("description", "")) > MAX_DESCRIPTION_LENGTH:
+            post["description"] = post["description"][:MAX_DESCRIPTION_LENGTH].rsplit(" ", 1)[0] + "..."
 
         return post
 
@@ -1313,6 +1437,17 @@ class NewsProcessor:
 
         digest = "\n".join(lines)
 
+        # Защита от превышения лимита Telegram (4096 символов)
+        if len(digest) > self.TELEGRAM_MESSAGE_LIMIT:
+            logger.warning(
+                f"⚠️ Дайджест превышает лимит Telegram ({len(digest)} > {self.TELEGRAM_MESSAGE_LIMIT}). "
+                "Разбиваем на части."
+            )
+            # Разбиваем на части: header + первые N новостей, затем остальные + footer
+            digest_parts = self._split_digest_by_limit(lines, self.TELEGRAM_MESSAGE_LIMIT)
+        else:
+            digest_parts = [digest]
+
         # Публикация дайджеста
         preview_channel = (self.publication_preview_channel or "").strip()
         if preview_channel:
@@ -1320,24 +1455,26 @@ class NewsProcessor:
                 # Security: Rate limiting для защиты от Telegram API ban
                 # Получаем ID канала для per-chat limiting
                 preview_entity = await client.get_entity(preview_channel)
-                await self._rate_limiter.acquire(
-                    chat_id=preview_entity.id,
-                    endpoint="send_message",
-                    priority=1  # Preview имеет средний приоритет
-                )
-                await client.send_message(preview_channel, digest)
+                for part in digest_parts:
+                    await self._rate_limiter.acquire(
+                        chat_id=preview_entity.id,
+                        endpoint="send_message",
+                        priority=1  # Preview имеет средний приоритет
+                    )
+                    await client.send_message(preview_channel, part)
                 logger.info("📄 Черновик дайджеста отправлен в %s", preview_channel)
             except Exception as exc:  # noqa: BLE001
                 logger.error("Не удалось отправить превью в %s: %s", preview_channel, exc)
 
         # Публикуем в основной канал
         target_entity = await client.get_entity(target_channel)
-        await self._rate_limiter.acquire(
-            chat_id=target_entity.id,
-            endpoint="send_message",
-            priority=2  # Публикация имеет высокий приоритет
-        )
-        await client.send_message(target_channel, digest)
+        for part in digest_parts:
+            await self._rate_limiter.acquire(
+                chat_id=target_entity.id,
+                endpoint="send_message",
+                priority=2  # Публикация имеет высокий приоритет
+            )
+            await client.send_message(target_channel, part)
         logger.info(f"✅ Дайджест опубликован в {target_channel}")
 
         notify_account = (self.publication_notify_account or "").strip()

@@ -21,7 +21,6 @@ from tenacity import (
 )
 
 from utils.logger import setup_logger
-from utils.circuit_breaker import ServiceCircuitBreakers, circuit_breaker
 from services.gemini_cache import GeminiCache
 
 
@@ -464,7 +463,8 @@ class GeminiClient:
 
         # Проверяем кэш
         cache_params = {"top_n": top_n}
-        cached_result = self._response_cache.get(messages, cache_params)
+        cache_key = {"messages": messages, "params": cache_params}
+        cached_result = self._response_cache.get(cache_key)
         if cached_result is not None:
             logger.info("Gemini ответ получен из кэша")
             return cached_result
@@ -482,12 +482,7 @@ class GeminiClient:
         try:
             start_time = time.time()
             model = self._ensure_model()
-
-            # Используем Circuit Breaker для защиты от сбоев API
-            response = ServiceCircuitBreakers.gemini_api.call(
-                model.generate_content,
-                prompt
-            )
+            response = model.generate_content(prompt)
             result_text = response.text.strip()
             duration = time.time() - start_time
 
@@ -516,8 +511,6 @@ class GeminiClient:
 
             # Сохраняем результат в кэш
             result = selected[:top_n]
-            # Комбинируем messages и cache_params для создания уникального ключа
-            cache_key = {"messages": messages, "params": cache_params}
             self._response_cache.set(cache_key, result)
             logger.debug("Результат сохранен в кэш")
 
@@ -1130,6 +1123,48 @@ class GeminiClient:
             logger.error(f"Ошибка при отборе новостей (dynamic categories, chunk): {e}")
             return {cat: [] for cat in category_counts.keys()}
 
+    def _deduplicate_by_source_id(
+        self,
+        all_categories: dict[str, list[dict]],
+        category_counts: dict[str, int],
+    ) -> dict[str, list[dict]]:
+        """
+        Удаляет дубликаты по source_message_id из результатов чанков.
+
+        Одно сообщение может быть выбрано Gemini в разных чанках или категориях.
+        Этот метод гарантирует что каждый source_message_id встречается только один раз.
+
+        Args:
+            all_categories: Словарь категорий с новостями
+            category_counts: Ожидаемое количество новостей по категориям
+
+        Returns:
+            Очищенный словарь категорий без дубликатов
+        """
+        seen_ids: set[int] = set()
+        deduplicated = {cat: [] for cat in category_counts.keys()}
+        duplicate_count = 0
+
+        for category_name in category_counts.keys():
+            for news in all_categories.get(category_name, []):
+                source_id = news.get("source_message_id")
+                if source_id is not None and source_id in seen_ids:
+                    duplicate_count += 1
+                    logger.debug(
+                        f"Дубликат source_message_id={source_id} удалён из категории {category_name}"
+                    )
+                    continue
+                if source_id is not None:
+                    seen_ids.add(source_id)
+                deduplicated[category_name].append(news)
+
+        if duplicate_count > 0:
+            logger.info(
+                f"🔍 Удалено {duplicate_count} дубликатов по source_message_id после chunking"
+            )
+
+        return deduplicated
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -1230,6 +1265,10 @@ class GeminiClient:
             if i < len(chunks):
                 logger.info(f"⏱️  Rate limiting: пауза 60 секунд перед следующим чанком ({i+1}/{len(chunks)})")
                 time.sleep(60)
+
+        # Дедупликация по source_message_id после объединения чанков
+        # Одно сообщение может быть выбрано в разных чанках - оставляем только первое вхождение
+        all_categories = self._deduplicate_by_source_id(all_categories, category_counts)
 
         # НОВАЯ ЛОГИКА: Глобальная сортировка по score (приоритет > категории)
         # Объединяем все новости из всех категорий
@@ -1371,6 +1410,10 @@ class GeminiClient:
             if i < len(chunks):
                 logger.info(f"⏱️  Rate limiting: пауза 60 секунд перед следующим чанком ({i+1}/{len(chunks)})")
                 time.sleep(60)
+
+        # Дедупликация по source_message_id после объединения чанков
+        category_counts_3 = {"wildberries": wb_count, "ozon": ozon_count, "general": general_count}
+        all_categories = self._deduplicate_by_source_id(all_categories, category_counts_3)
 
         # Сортируем каждую категорию по score
         all_categories["wildberries"].sort(key=lambda x: x.get("score", 0), reverse=True)

@@ -105,8 +105,8 @@ channels:
       general: 4       # 4 новости про другие маркетплейсы/законы/е-торговлю (после дедупликации ~3)
 
 moderation:
-  enabled: true
-  timeout_hours: 2
+  auto: true                 # Полностью автоматическая модерация
+  enabled: false             # Ручная модерация отключена
 
 cleanup:
   raw_messages_days: 14
