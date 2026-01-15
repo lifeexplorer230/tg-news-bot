@@ -2,6 +2,7 @@
 
 import asyncio
 import functools
+import re
 import threading
 from collections.abc import Iterable
 from pathlib import Path
@@ -12,6 +13,104 @@ from sentence_transformers import SentenceTransformer
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+
+def normalize_text_for_embedding(
+    text: str,
+    *,
+    remove_urls: bool = True,
+    remove_emoji: bool = True,
+    remove_source_mentions: bool = False,
+    source_keywords: list[str] | None = None,
+) -> str:
+    """
+    FIX-DUPLICATE-3: Нормализация текста перед созданием embeddings
+    FIX-DUPLICATE-5: Удаление упоминаний источников для детекции новостей из разных источников
+
+    Цель: Устранить технические различия между текстами, чтобы
+    перефразированные дубликаты детектировались лучше.
+
+    Выполняет:
+    1. Удаляет лишние пробелы и переносы строк
+    2. Заменяет URL на маркер [URL] (опционально)
+    3. Удаляет эмодзи (опционально)
+    4. Удаляет упоминания источников (опционально) - FIX-DUPLICATE-5
+    5. Trim пробелов в начале и конце
+
+    Args:
+        text: Текст для нормализации
+        remove_urls: Заменять URL на маркер [URL]
+        remove_emoji: Удалять эмодзи
+        remove_source_mentions: Удалять упоминания источников (FIX-DUPLICATE-5)
+        source_keywords: Список источников для удаления (например: ["РБК", "Коммерсантъ"])
+
+    Returns:
+        Нормализованный текст
+
+    Example:
+        >>> normalize_text_for_embedding("Ozon   снизил\\n\\nкомиссию")
+        "Ozon снизил комиссию"
+        >>> normalize_text_for_embedding("РБК сообщает: новость", remove_source_mentions=True, source_keywords=["РБК"])
+        "новость"
+    """
+    if not text:
+        return ""
+
+    # Шаг 1: Удаляем упоминания источников (FIX-DUPLICATE-5)
+    if remove_source_mentions and source_keywords:
+        # Паттерны для удаления упоминаний источников:
+        # - "X сообщает:"
+        # - "По данным X,"
+        # - "Источник: X"
+        # - "X заявил:"
+        # - "Согласно X,"
+        # - "X:"
+        for source in source_keywords:
+            # Экранируем специальные символы regex
+            escaped_source = re.escape(source)
+
+            # Паттерны для удаления (case insensitive)
+            patterns = [
+                rf'{escaped_source}\s+сообщает:?\s*',  # "X сообщает:"
+                rf'по данным\s+{escaped_source},?\s*',  # "По данным X,"
+                rf'источник:?\s*{escaped_source}\.?\s*',  # "Источник: X"
+                rf'{escaped_source}\s+заявил:?\s*',  # "X заявил:"
+                rf'согласно\s+{escaped_source},?\s*',  # "Согласно X,"
+                rf'{escaped_source}:\s+',  # "X: " (только в начале предложения)
+            ]
+
+            for pattern in patterns:
+                text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+
+    # Шаг 2: Заменяем URL на маркер [URL]
+    if remove_urls:
+        # Regex для URL: http(s)://... или www....
+        url_pattern = r'https?://\S+|www\.\S+'
+        text = re.sub(url_pattern, '[URL]', text)
+
+    # Шаг 3: Удаляем эмодзи
+    if remove_emoji:
+        # Regex для эмодзи (Unicode ranges)
+        emoji_pattern = re.compile(
+            "["
+            "\U0001F600-\U0001F64F"  # emoticons
+            "\U0001F300-\U0001F5FF"  # symbols & pictographs
+            "\U0001F680-\U0001F6FF"  # transport & map symbols
+            "\U0001F1E0-\U0001F1FF"  # flags (iOS)
+            "\U00002702-\U000027B0"
+            "\U000024C2-\U0001F251"
+            "]+",
+            flags=re.UNICODE
+        )
+        text = emoji_pattern.sub('', text)
+
+    # Шаг 4: Заменяем множественные пробелы и переносы строк на одиночные пробелы
+    text = re.sub(r'\s+', ' ', text)
+
+    # Шаг 5: Удаляем пробелы в начале и конце
+    text = text.strip()
+
+    return text
 
 _MODEL_CACHE: dict[str, SentenceTransformer] = {}
 _MODEL_LOCK = threading.Lock()
@@ -27,6 +126,11 @@ class EmbeddingService:
         local_path: str | None = None,
         allow_remote_download: bool = True,
         enable_fallback: bool = True,
+        enable_text_normalization: bool = True,
+        normalize_remove_urls: bool = True,
+        normalize_remove_emoji: bool = True,
+        normalize_remove_sources: bool = False,
+        normalize_source_keywords: list[str] | None = None,
     ):
         """Создаёт ленивый сервис embeddings.
 
@@ -34,12 +138,32 @@ class EmbeddingService:
             model_name: Имя модели в Hugging Face sentence-transformers.
             local_path: Путь до локальной копии модели (если есть).
             allow_remote_download: Разрешить скачивание с Hugging Face, если локальной модели нет.
+            enable_text_normalization: FIX-DUPLICATE-3: Включить нормализацию текста перед encoding
+            normalize_remove_urls: Заменять URL на маркер [URL]
+            normalize_remove_emoji: Удалять эмодзи
+            normalize_remove_sources: FIX-DUPLICATE-5: Удалять упоминания источников
+            normalize_source_keywords: Список источников для удаления (по умолчанию - популярные СМИ/маркетплейсы)
         """
         self.model_name = model_name
         self.local_path = local_path
         self.allow_remote_download = allow_remote_download
         self.enable_fallback = enable_fallback
         self._model: SentenceTransformer | None = None
+
+        # FIX-DUPLICATE-3: Параметры нормализации текста
+        self.enable_text_normalization = enable_text_normalization
+        self.normalize_remove_urls = normalize_remove_urls
+        self.normalize_remove_emoji = normalize_remove_emoji
+
+        # FIX-DUPLICATE-5: Параметры фильтрации источников
+        self.normalize_remove_sources = normalize_remove_sources
+        # Дефолтный список популярных источников (российские СМИ и маркетплейсы)
+        self.normalize_source_keywords = normalize_source_keywords or [
+            "Ozon", "Wildberries", "Яндекс",
+            "РБК", "Коммерсантъ", "Ведомости",
+            "ТАСС", "Интерфакс", "РИА Новости",
+            "Лента.ру", "Газета.ру",
+        ]
 
     def _cache_key(self) -> str:
         return f"{self.model_name}|{self.local_path or ''}"
@@ -92,6 +216,16 @@ class EmbeddingService:
         Returns:
             Numpy array с embedding
         """
+        # FIX-DUPLICATE-3: Применяем нормализацию перед encoding
+        # FIX-DUPLICATE-5: Включая фильтрацию источников
+        if self.enable_text_normalization:
+            text = normalize_text_for_embedding(
+                text,
+                remove_urls=self.normalize_remove_urls,
+                remove_emoji=self.normalize_remove_emoji,
+                remove_source_mentions=self.normalize_remove_sources,
+                source_keywords=self.normalize_source_keywords,
+            )
         model = self._ensure_model()
         return model.encode(text, convert_to_numpy=True)
 
@@ -113,6 +247,19 @@ class EmbeddingService:
         Returns:
             Numpy array с embeddings
         """
+        # FIX-DUPLICATE-3: Применяем нормализацию к каждому тексту перед encoding
+        # FIX-DUPLICATE-5: Включая фильтрацию источников
+        if self.enable_text_normalization:
+            texts = [
+                normalize_text_for_embedding(
+                    text,
+                    remove_urls=self.normalize_remove_urls,
+                    remove_emoji=self.normalize_remove_emoji,
+                    remove_source_mentions=self.normalize_remove_sources,
+                    source_keywords=self.normalize_source_keywords,
+                )
+                for text in texts
+            ]
         model = self._ensure_model()
         return model.encode(
             texts,
