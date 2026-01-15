@@ -527,19 +527,20 @@ class Database:
 
             return results
 
-    def check_duplicate(self, embedding: np.ndarray, threshold: float = 0.85) -> bool:
+    def check_duplicate(self, embedding: np.ndarray, threshold: float = 0.85, days: int = 60) -> bool:
         """
         Проверить является ли текст дубликатом опубликованного
 
         Args:
             embedding: Embedding текста для проверки
             threshold: Порог схожести (0.0 - 1.0)
+            days: FIX-DUPLICATE-6: Временное окно поиска дубликатов (по умолчанию 60 дней)
 
         Returns:
             True если найден дубликат
         """
         # Блокировка внутри get_published_embeddings
-        published_embeddings = self.get_published_embeddings(days=60)
+        published_embeddings = self.get_published_embeddings(days=days)
 
         if not published_embeddings:
             return False

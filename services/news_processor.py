@@ -1,7 +1,7 @@
 """Универсальный процессор новостей с поддержкой категорий"""
 
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import numpy as np
 from telethon import TelegramClient
@@ -42,6 +42,10 @@ class NewsProcessor:
         # Кэш для оптимизации (CR-H1)
         self._cached_published_embeddings: list[tuple[int, any]] | None = None
         # QA-7: _cached_base_messages удалён как мёртвый код (не используется)
+
+        # FIX-DUPLICATE-1: TTL-based cache invalidation для предотвращения дубликатов между запусками
+        self._cache_timestamp: datetime | None = None
+        self._cache_ttl_seconds: int = config.get("cache.ttl_seconds", 1800)  # 30 минут по умолчанию
 
         # QA-4: Кэш матрицы embeddings для оптимизации дедупликации O(N²) → O(N)
         self._published_embeddings_matrix: np.ndarray | None = None
@@ -118,7 +122,17 @@ class NewsProcessor:
         self.publication_preview_channel = config.get("publication.preview_channel")
         self.publication_notify_account = config.get("publication.notify_account")
 
-        self.duplicate_threshold = config.get("processor.duplicate_threshold", 0.85)
+        # FIX-DUPLICATE-2: Снижен порог с 0.85 до 0.78 для лучшей детекции перефразированных дубликатов
+        self.duplicate_threshold = config.get("processor.duplicate_threshold", 0.78)
+
+        # FIX-DUPLICATE-4: DBSCAN clustering для лучшей детекции кластеров дубликатов
+        self.use_dbscan = config.get("processor.use_dbscan", False)  # По умолчанию выключен (backwards compatibility)
+        self.dbscan_eps = config.get("processor.dbscan_eps", 0.22)  # eps = 1 - similarity_threshold (1 - 0.78 = 0.22)
+        self.dbscan_min_samples = config.get("processor.dbscan_min_samples", 2)  # Минимум 2 точки для кластера
+
+        # FIX-DUPLICATE-6: Настраиваемое временное окно для поиска дубликатов
+        self.duplicate_time_window_days = config.get("processor.duplicate_time_window_days", 60)  # 60 дней по умолчанию
+
         self.processor_top_n = config.get("processor.top_n", 10)
         self.processor_exclude_count = config.get("processor.exclude_count", 5)
         if not isinstance(self.processor_top_n, int) or self.processor_top_n <= 0:
@@ -230,10 +244,38 @@ class NewsProcessor:
             return unique, rejected
 
         # CR-H1: Загружаем published embeddings один раз и кэшируем
+        # FIX-DUPLICATE-1: Проверяем TTL кэша и перезагружаем если устарел
         # Sprint 6.3: Неблокирующий доступ к БД
+        cache_needs_reload = False
         if self._cached_published_embeddings is None:
-            self._cached_published_embeddings = await asyncio.to_thread(self.db.get_published_embeddings, days=60)
-            logger.debug(f"Загружено {len(self._cached_published_embeddings)} published embeddings в кэш")
+            cache_needs_reload = True
+            logger.debug("Кэш embeddings пуст, требуется загрузка")
+        elif self._cache_timestamp is None:
+            cache_needs_reload = True
+            logger.debug("Timestamp кэша отсутствует, требуется перезагрузка")
+        else:
+            # Проверяем возраст кэша
+            cache_age_seconds = (datetime.now() - self._cache_timestamp).total_seconds()
+            if cache_age_seconds > self._cache_ttl_seconds:
+                cache_needs_reload = True
+                logger.info(
+                    f"Кэш embeddings устарел (возраст: {cache_age_seconds:.1f}с, TTL: {self._cache_ttl_seconds}с), "
+                    f"выполняется перезагрузка из БД"
+                )
+
+        if cache_needs_reload:
+            # FIX-DUPLICATE-6: Используем конфигурируемое временное окно вместо хардкода 60
+            self._cached_published_embeddings = await asyncio.to_thread(
+                self.db.get_published_embeddings, days=self.duplicate_time_window_days
+            )
+            self._cache_timestamp = datetime.now()
+            # Сбрасываем матрицу embeddings при перезагрузке кэша
+            self._published_embeddings_matrix = None
+            self._published_embeddings_ids = None
+            logger.info(
+                f"Загружено {len(self._cached_published_embeddings)} published embeddings в кэш "
+                f"(TTL: {self._cache_ttl_seconds}с)"
+            )
 
         # QA-4: Строим матрицу embeddings один раз для всех проверок
         # Sprint 6.3.4: используем кэш напрямую, без промежуточной переменной
@@ -311,7 +353,7 @@ class NewsProcessor:
         return unique, rejected
 
     async def deduplicate_selected_posts(
-        self, posts: list[dict], threshold: float = 0.85
+        self, posts: list[dict], threshold: float = 0.78
     ) -> tuple[list[dict], list[dict]]:
         """
         Дедупликация отобранных Gemini новостей перед модерацией
@@ -322,7 +364,7 @@ class NewsProcessor:
 
         Args:
             posts: Список новостей после отбора Gemini (с title, description)
-            threshold: Порог схожести (0.85 = удаляем только почти идентичные дубликаты)
+            threshold: Порог схожести (FIX-DUPLICATE-2: снижен с 0.85 до 0.78 для детекции перефразированных дубликатов)
 
         Returns:
             Tuple of (unique_posts, duplicates)
@@ -355,9 +397,6 @@ class NewsProcessor:
             logger.info(f"🔍 Удалено {id_duplicates} дубликатов по source_message_id")
 
         # ЭТАП 2: Семантическая дедупликация по embeddings
-        unique = []
-        seen_embeddings = []
-
         # Создаём embeddings для каждого поста
         # Используем title + description для более точной проверки
         texts = [
@@ -366,14 +405,135 @@ class NewsProcessor:
         ]
         embeddings_array = await self.embeddings.encode_batch_async(texts, batch_size=32)
 
-        logger.debug(
-            f"Post-Gemini семантическая дедупликация: проверяем {len(unique_by_id)} новостей (порог={threshold})"
+        # FIX-DUPLICATE-4: Используем DBSCAN или fixed threshold в зависимости от конфигурации
+        if self.use_dbscan:
+            logger.debug(
+                f"Post-Gemini DBSCAN дедупликация: проверяем {len(unique_by_id)} новостей "
+                f"(eps={self.dbscan_eps}, min_samples={self.dbscan_min_samples})"
+            )
+            unique, semantic_dups = self._deduplicate_with_dbscan(unique_by_id, embeddings_array)
+        else:
+            logger.debug(
+                f"Post-Gemini threshold дедупликация: проверяем {len(unique_by_id)} новостей (порог={threshold})"
+            )
+            unique, semantic_dups = self._deduplicate_with_threshold(unique_by_id, embeddings_array, threshold)
+
+        duplicates.extend(semantic_dups)
+        semantic_duplicates = len(semantic_dups)
+
+        logger.info(
+            f"✅ Post-Gemini дедупликация: {len(unique)} уникальных, "
+            f"{len(duplicates)} дубликатов удалено ({id_duplicates} по ID, {semantic_duplicates} семантических)"
         )
 
-        semantic_duplicates = 0
-        for post, embedding in zip(unique_by_id, embeddings_array):
+        return unique, duplicates
+
+    def _deduplicate_with_dbscan(
+        self, posts: list[dict], embeddings_array: np.ndarray
+    ) -> tuple[list[dict], list[dict]]:
+        """
+        FIX-DUPLICATE-4: DBSCAN-based дедупликация
+
+        Использует DBSCAN (Density-Based Spatial Clustering) для поиска кластеров
+        похожих новостей. Из каждого кластера оставляет только один представитель.
+
+        Преимущества над fixed threshold:
+        - Автоматически находит кластеры похожих новостей
+        - Учитывает локальную плотность (5 похожих новостей = 1 кластер)
+        - Outliers (уникальные новости) остаются уникальными
+
+        Args:
+            posts: Список новостей
+            embeddings_array: Numpy array с embeddings (shape: [n_posts, embedding_dim])
+
+        Returns:
+            Tuple of (unique_posts, duplicates)
+        """
+        if len(posts) == 0:
+            return [], []
+
+        if len(posts) == 1:
+            # Один пост всегда уникален
+            return posts, []
+
+        try:
+            from sklearn.cluster import DBSCAN
+        except ImportError:
+            logger.warning(
+                "sklearn не установлен, используется fallback на fixed threshold дедупликацию. "
+                "Установите: pip install scikit-learn"
+            )
+            # Fallback на стандартный метод
+            return self._deduplicate_with_threshold(posts, embeddings_array, self.duplicate_threshold)
+
+        # Запускаем DBSCAN
+        dbscan = DBSCAN(
+            eps=self.dbscan_eps,
+            min_samples=self.dbscan_min_samples,
+            metric="cosine",
+        )
+        labels = dbscan.fit_predict(embeddings_array)
+
+        logger.debug(
+            f"DBSCAN дедупликация: найдено {len(set(labels))} кластеров "
+            f"(eps={self.dbscan_eps}, min_samples={self.dbscan_min_samples})"
+        )
+
+        # Группируем посты по кластерам
+        unique = []
+        duplicates = []
+        cluster_representatives: dict[int, int] = {}  # cluster_id -> index of representative
+
+        for idx, (post, label) in enumerate(zip(posts, labels)):
+            if label == -1:
+                # Outlier (шум) - считаем уникальным
+                unique.append(post)
+                logger.debug(f"DBSCAN: outlier #{idx} '{post.get('title', '')[:40]}...' - уникальный")
+            else:
+                # Элемент кластера
+                if label not in cluster_representatives:
+                    # Первый элемент кластера - представитель
+                    cluster_representatives[label] = idx
+                    unique.append(post)
+                    logger.debug(
+                        f"DBSCAN: кластер {label}, представитель #{idx} '{post.get('title', '')[:40]}...'"
+                    )
+                else:
+                    # Дубликат - не первый в кластере
+                    duplicates.append(post)
+                    representative_idx = cluster_representatives[label]
+                    logger.info(
+                        f"🔍 DBSCAN дубликат: '{post.get('title', '')[:50]}...' "
+                        f"в кластере {label} (представитель #{representative_idx})"
+                    )
+
+        logger.info(
+            f"✅ DBSCAN дедупликация: {len(unique)} уникальных, "
+            f"{len(duplicates)} дубликатов удалено"
+        )
+
+        return unique, duplicates
+
+    def _deduplicate_with_threshold(
+        self, posts: list[dict], embeddings_array: np.ndarray, threshold: float
+    ) -> tuple[list[dict], list[dict]]:
+        """
+        Стандартная дедупликация с fixed threshold (используется как fallback)
+
+        Args:
+            posts: Список новостей
+            embeddings_array: Numpy array с embeddings
+            threshold: Порог схожести
+
+        Returns:
+            Tuple of (unique_posts, duplicates)
+        """
+        unique = []
+        duplicates = []
+        seen_embeddings = []
+
+        for post, embedding in zip(posts, embeddings_array):
             if not seen_embeddings:
-                # Первый пост всегда уникален
                 unique.append(post)
                 seen_embeddings.append(embedding)
                 continue
@@ -384,23 +544,15 @@ class NewsProcessor:
             max_similarity = np.max(similarities) if len(similarities) > 0 else 0.0
 
             if max_similarity >= threshold:
-                # Найден дубликат среди отобранных Gemini новостей
                 duplicates.append(post)
-                semantic_duplicates += 1
                 duplicate_idx = np.argmax(similarities)
                 logger.info(
-                    f"🔍 Post-Gemini семантический дубликат: '{post.get('title', '')[:50]}...' "
+                    f"🔍 Threshold дубликат: '{post.get('title', '')[:50]}...' "
                     f"похожа на #{duplicate_idx+1} (similarity={max_similarity:.3f})"
                 )
             else:
-                # Уникальная новость
                 unique.append(post)
                 seen_embeddings.append(embedding)
-
-        logger.info(
-            f"✅ Post-Gemini дедупликация: {len(unique)} уникальных, "
-            f"{len(duplicates)} дубликатов удалено ({id_duplicates} по ID, {semantic_duplicates} семантических)"
-        )
 
         return unique, duplicates
 
@@ -408,6 +560,7 @@ class NewsProcessor:
         """
         QA-2: Обновить кэш published embeddings после публикации
         QA-4: Также обновляем матрицу embeddings для оптимизации дедупликации
+        FIX-DUPLICATE-1: Обновляем timestamp кэша при инкрементальном обновлении
 
         Инкрементально добавляет новые embeddings в кэш, чтобы последующие
         категории в том же запуске могли детектировать дубликаты.
@@ -419,11 +572,16 @@ class NewsProcessor:
         if self._cached_published_embeddings is None:
             # Кэш ещё не инициализирован - инициализируем
             self._cached_published_embeddings = []
+            self._cache_timestamp = datetime.now()
             logger.debug("QA-2: Инициализирован кэш published embeddings")
 
         # Добавляем новые embeddings в кэш
         new_entries = list(zip(post_ids, embeddings))
         self._cached_published_embeddings.extend(new_entries)
+
+        # FIX-DUPLICATE-1: Обновляем timestamp при инкрементальном обновлении
+        # Это гарантирует что кэш считается свежим после добавления новых embeddings
+        self._cache_timestamp = datetime.now()
 
         # QA-4: Обновляем матрицу embeddings инкрементально
         if self._published_embeddings_matrix is not None and len(embeddings) > 0:
@@ -442,13 +600,14 @@ class NewsProcessor:
         )
 
     def _check_duplicate_inline(
-        self, embedding: np.ndarray, threshold: float = 0.85
+        self, embedding: np.ndarray, threshold: float = 0.78
     ) -> bool:
         """
         Проверить дубликат inline без обращения к БД (оптимизация CR-H1)
         Оптимизировано (CR-C5): используем batch_cosine_similarity для векторизации
         Оптимизировано (QA-4): переиспользуем кэшированную матрицу вместо пересоздания
         Рефакторинг (Sprint 6.3.4): удалён неиспользуемый параметр published_embeddings
+        FIX-DUPLICATE-2: Снижен порог с 0.85 до 0.78
 
         Args:
             embedding: Embedding для проверки
@@ -607,10 +766,10 @@ class NewsProcessor:
         # ШАГ 4.5 (НОВОЕ): Дедупликация после Gemini
         # Gemini может выбрать похожие новости из разных чунков обработки
         # Фильтруем почти идентичные новости перед отправкой на модерацию
-        # Порог 0.85 - удаляем только очень похожие дубликаты (основная работа делегирована Gemini через промпт)
+        # FIX-DUPLICATE-2: Используем конфигурируемый порог вместо хардкода
         all_selected_posts = [post for posts in categories.values() for post in posts]
         unique_posts, post_duplicates = await self.deduplicate_selected_posts(
-            all_selected_posts, threshold=0.85
+            all_selected_posts, threshold=self.duplicate_threshold
         )
 
         # Если после дедупликации не осталось новостей
