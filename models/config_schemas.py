@@ -342,6 +342,7 @@ class EnvConfig(BaseModel):
     GEMINI_API_KEY: str = Field(..., min_length=20, description="Gemini API Key")
     MY_CHANNEL: str = Field(default="", description="Канал для публикации")
     MY_PERSONAL_ACCOUNT: str = Field(default="", description="Личный аккаунт")
+    STATUS_BOT_TOKEN: str = Field(default="", description="Bot token для статус-репортов")
 
     @field_validator("TELEGRAM_API_ID")
     @classmethod

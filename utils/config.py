@@ -154,6 +154,7 @@ class Config:
                 "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY", ""),
                 "MY_CHANNEL": self._get_env_with_profile("MY_CHANNEL"),
                 "MY_PERSONAL_ACCOUNT": self._get_env_with_profile("MY_PERSONAL_ACCOUNT"),
+                "STATUS_BOT_TOKEN": os.getenv("STATUS_BOT_TOKEN", ""),
             }
             # Валидируем через Pydantic
             EnvConfig(**env_vars)
