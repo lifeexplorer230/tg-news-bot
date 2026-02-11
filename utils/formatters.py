@@ -1,25 +1,10 @@
 from datetime import date
 
+from utils.constants import NUMBER_EMOJIS
+
 
 def format_categories_moderation_message(categories: dict[str, list[dict]]) -> str:
     """Формирует текст для модерации по категориям Wildberries/Ozon/General."""
-    number_emojis = {
-        1: "1️⃣",
-        2: "2️⃣",
-        3: "3️⃣",
-        4: "4️⃣",
-        5: "5️⃣",
-        6: "6️⃣",
-        7: "7️⃣",
-        8: "8️⃣",
-        9: "9️⃣",
-        10: "🔟",
-        11: "1️⃣1️⃣",
-        12: "1️⃣2️⃣",
-        13: "1️⃣3️⃣",
-        14: "1️⃣4️⃣",
-        15: "1️⃣5️⃣",
-    }
 
     lines = ["📋 **МОДЕРАЦИЯ: ВСЕ КАТЕГОРИИ**"]
     lines.append("_Нужно выбрать 10 лучших из 15 новостей_\n")
@@ -29,7 +14,7 @@ def format_categories_moderation_message(categories: dict[str, list[dict]]) -> s
     if categories.get("wildberries"):
         lines.append("📦 **WILDBERRIES**\n")
         for post in categories["wildberries"]:
-            emoji = number_emojis.get(idx, f"{idx}.")
+            emoji = NUMBER_EMOJIS.get(idx, f"{idx}.")
             lines.append(f"{emoji} **{post['title']}**")
             lines.append(f"_{post['description'][:100]}..._")
             lines.append(f"⭐ {post.get('score', 0)}/10\n")
@@ -38,7 +23,7 @@ def format_categories_moderation_message(categories: dict[str, list[dict]]) -> s
     if categories.get("ozon"):
         lines.append("📦 **OZON**\n")
         for post in categories["ozon"]:
-            emoji = number_emojis.get(idx, f"{idx}.")
+            emoji = NUMBER_EMOJIS.get(idx, f"{idx}.")
             lines.append(f"{emoji} **{post['title']}**")
             lines.append(f"_{post['description'][:100]}..._")
             lines.append(f"⭐ {post.get('score', 0)}/10\n")
@@ -47,7 +32,7 @@ def format_categories_moderation_message(categories: dict[str, list[dict]]) -> s
     if categories.get("general"):
         lines.append("🛒 **ОБЩИЕ НОВОСТИ**\n")
         for post in categories["general"]:
-            emoji = number_emojis.get(idx, f"{idx}.")
+            emoji = NUMBER_EMOJIS.get(idx, f"{idx}.")
             lines.append(f"{emoji} **{post['title']}**")
             lines.append(f"_{post['description'][:100]}..._")
             lines.append(f"⭐ {post.get('score', 0)}/10\n")
@@ -63,24 +48,11 @@ def format_categories_moderation_message(categories: dict[str, list[dict]]) -> s
 
 def format_moderation_message(posts: list[dict], marketplace: str) -> str:
     """Формирует сообщение для модерации конкретного маркетплейса."""
-    number_emojis = {
-        1: "1️⃣",
-        2: "2️⃣",
-        3: "3️⃣",
-        4: "4️⃣",
-        5: "5️⃣",
-        6: "6️⃣",
-        7: "7️⃣",
-        8: "8️⃣",
-        9: "9️⃣",
-        10: "🔟",
-    }
-
     lines = [f"📋 **МОДЕРАЦИЯ: {marketplace.upper()}**"]
     lines.append("_(Отсортировано по важности)_\n")
 
     for post in posts:
-        emoji = number_emojis.get(post["moderation_id"], f"{post['moderation_id']}️⃣")
+        emoji = NUMBER_EMOJIS.get(post["moderation_id"], f"{post['moderation_id']}️⃣")
         lines.append(f"{emoji} **{post['title']}**")
         lines.append(f"_{post['description']}_")
         lines.append(f"⭐ {post.get('score', 0)}/10\n")
@@ -104,21 +76,8 @@ def format_digest_message(
         f"📌 Главные новости {marketplace.upper()} за {digest_date.strftime('%d-%m-%Y')}\n"
     ]
 
-    number_emojis = {
-        1: "1️⃣",
-        2: "2️⃣",
-        3: "3️⃣",
-        4: "4️⃣",
-        5: "5️⃣",
-        6: "6️⃣",
-        7: "7️⃣",
-        8: "8️⃣",
-        9: "9️⃣",
-        10: "🔟",
-    }
-
     for idx, post in enumerate(posts, 1):
-        emoji = number_emojis.get(idx, f"{idx}️⃣")
+        emoji = NUMBER_EMOJIS.get(idx, f"{idx}️⃣")
         lines.append(f"{emoji} **{post['title']}**\n")
         lines.append(f"{post['description']}\n")
 
@@ -130,3 +89,45 @@ def format_digest_message(
     lines.append(target_channel)
 
     return "\n".join(lines)
+
+
+def ensure_post_fields(post: dict) -> dict:
+    """
+    QA-1: Fallback-форматирование для постов без title/description.
+
+    Гарантирует наличие обязательных полей в посте.
+    Если title или description отсутствуют, извлекаются из text.
+
+    Args:
+        post: Словарь с данными поста
+
+    Returns:
+        Валидированный пост с гарантированными полями title, description
+    """
+    if "title" not in post or not post["title"]:
+        text = post.get("text", "")
+        if text:
+            lines = text.split("\n", 1)
+            first_line = lines[0].strip()
+            words = first_line.split()
+            post["title"] = " ".join(words[:7]) if len(words) > 7 else first_line
+        else:
+            post["title"] = "Без заголовка"
+
+    if "description" not in post or not post["description"]:
+        text = post.get("text", "")
+        if text:
+            lines = text.split("\n", 1)
+            if len(lines) > 1:
+                post["description"] = lines[1].strip()[:200]
+            else:
+                words = text.split()
+                post["description"] = " ".join(words[7:]) if len(words) > 7 else text
+        else:
+            post["description"] = "Описание отсутствует"
+
+    MAX_DESCRIPTION_LENGTH = 250
+    if len(post.get("description", "")) > MAX_DESCRIPTION_LENGTH:
+        post["description"] = post["description"][:MAX_DESCRIPTION_LENGTH].rsplit(" ", 1)[0] + "..."
+
+    return post

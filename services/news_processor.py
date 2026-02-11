@@ -12,6 +12,8 @@ from services.embeddings import EmbeddingService
 from services.gemini_client import GeminiClient
 from services.auto_moderator import AutoModerator, ModerationResult
 from utils.config import Config
+from utils.constants import NUMBER_EMOJIS
+from utils.formatters import ensure_post_fields
 from utils.logger import get_logger
 from utils.advanced_rate_limiter import MultiLevelRateLimiter, AdaptiveRateLimiter
 from utils.telegram_helpers import safe_connect
@@ -398,9 +400,9 @@ class NewsProcessor:
 
         # ЭТАП 2: Семантическая дедупликация по embeddings
         # Создаём embeddings для каждого поста
-        # Используем title + description для более точной проверки
+        # Используем оригинальный text для точной дедупликации (LLM-генерированные title/description могут отличаться)
         texts = [
-            f"{post.get('title', '')} {post.get('description', '')}"
+            post.get('text', f"{post.get('title', '')} {post.get('description', '')}")
             for post in unique_by_id
         ]
         embeddings_array = await self.embeddings.encode_batch_async(texts, batch_size=32)
@@ -939,7 +941,7 @@ class NewsProcessor:
         logger.info("✅ Обработка всех категорий завершена!")
 
     async def _wait_for_moderation_response_retry(
-        self, conv, total_posts: int
+        self, conv, total_posts: int, max_retries: int = 5
     ) -> list[int] | None:
         """
         Повторное ожидание ответа модератора (после некорректного ввода)
@@ -947,56 +949,67 @@ class NewsProcessor:
         Args:
             conv: Conversation объект
             total_posts: Общее количество новостей
+            max_retries: Максимальное количество попыток
 
         Returns:
             Список номеров для исключения или None если отмена
         """
-        try:
-            response = await conv.get_response(timeout=float('inf'))
-            response_text = response.message.strip().lower()
+        for attempt in range(max_retries):
+            try:
+                response = await conv.get_response(timeout=float('inf'))
+                response_text = response.message.strip().lower()
 
-            logger.info(f"📨 Получен повторный ответ модератора: {response_text}")
+                logger.info(f"📨 Получен повторный ответ модератора: {response_text}")
 
-            # Обработка команды отмены
-            if response_text in ["отмена", "cancel"]:
-                await conv.send_message("❌ Модерация отменена")
+                # Обработка команды отмены
+                if response_text in ["отмена", "cancel"]:
+                    await conv.send_message("❌ Модерация отменена")
+                    return None
+
+                # Обработка команды "опубликовать все"
+                if response_text in ["0", "все", "all"]:
+                    await conv.send_message(f"✅ Все {total_posts} новостей будут опубликованы")
+                    return []
+
+                # Парсинг номеров
+                excluded_ids = []
+                parts = response_text.split()
+
+                for part in parts:
+                    part = part.strip(",.")
+                    if part.isdigit():
+                        num = int(part)
+                        if 1 <= num <= total_posts:
+                            excluded_ids.append(num)
+                        else:
+                            logger.warning(f"Номер {num} вне диапазона 1-{total_posts}")
+
+                if not excluded_ids:
+                    remaining = max_retries - attempt - 1
+                    if remaining > 0:
+                        await conv.send_message(
+                            f"⚠️ Не удалось распознать номера. "
+                            f"Отправь номера через пробел (например: 1 2 3 5 6). "
+                            f"Осталось попыток: {remaining}"
+                        )
+                        continue
+                    else:
+                        await conv.send_message(
+                            "❌ Превышено количество попыток. Модерация отменена."
+                        )
+                        return None
+
+                await conv.send_message(
+                    f"✅ Исключено {len(excluded_ids)} новостей: {', '.join(map(str, excluded_ids))}\n"
+                    f"Будет опубликовано: {total_posts - len(excluded_ids)} новостей"
+                )
+                return excluded_ids
+
+            except Exception as e:
+                logger.error(f"Ошибка при повторном ожидании ответа: {e}", exc_info=True)
                 return None
 
-            # Обработка команды "опубликовать все"
-            if response_text in ["0", "все", "all"]:
-                await conv.send_message(f"✅ Все {total_posts} новостей будут опубликованы")
-                return []
-
-            # Парсинг номеров
-            excluded_ids = []
-            parts = response_text.split()
-
-            for part in parts:
-                part = part.strip(",.")
-                if part.isdigit():
-                    num = int(part)
-                    if 1 <= num <= total_posts:
-                        excluded_ids.append(num)
-                    else:
-                        logger.warning(f"Номер {num} вне диапазона 1-{total_posts}")
-
-            if not excluded_ids:
-                await conv.send_message(
-                    "⚠️ Не удалось распознать номера. "
-                    "Отправь номера через пробел (например: 1 2 3 5 6)"
-                )
-                # Рекурсивно ждем правильного ответа
-                return await self._wait_for_moderation_response_retry(conv, total_posts)
-
-            await conv.send_message(
-                f"✅ Исключено {len(excluded_ids)} новостей: {', '.join(map(str, excluded_ids))}\n"
-                f"Будет опубликовано: {total_posts - len(excluded_ids)} новостей"
-            )
-            return excluded_ids
-
-        except Exception as e:
-            logger.error(f"Ошибка при повторном ожидании ответа: {e}", exc_info=True)
-            return None
+        return None
 
     async def _wait_for_moderation_response(
         self, client: TelegramClient, personal_account: str, message: str, total_posts: int
@@ -1353,24 +1366,6 @@ class NewsProcessor:
             exclude_goal: Количество новостей для исключения
         """
 
-        number_emojis = {
-            1: "1️⃣",
-            2: "2️⃣",
-            3: "3️⃣",
-            4: "4️⃣",
-            5: "5️⃣",
-            6: "6️⃣",
-            7: "7️⃣",
-            8: "8️⃣",
-            9: "9️⃣",
-            10: "🔟",
-            11: "1️⃣1️⃣",
-            12: "1️⃣2️⃣",
-            13: "1️⃣3️⃣",
-            14: "1️⃣4️⃣",
-            15: "1️⃣5️⃣",
-        }
-
         # Используем УЖЕ отсортированный список (не пересортировываем!)
 
         lines = ["📋 **МОДЕРАЦИЯ: ТОПОВЫЕ НОВОСТИ**"]
@@ -1384,7 +1379,7 @@ class NewsProcessor:
         # Выводим все новости единым списком (УЖЕ отсортированы по score)
         for post in all_posts:
             mod_id = post.get('moderation_id', 0)
-            emoji = number_emojis.get(mod_id, f"{mod_id}.")
+            emoji = NUMBER_EMOJIS.get(mod_id, f"{mod_id}.")
             category_tag = post.get('category', '').upper()
             lines.append(f"{emoji} **{post['title']}**")
             lines.append(f"_{post['description'][:100]}..._")
@@ -1408,26 +1403,12 @@ class NewsProcessor:
 
     def _format_moderation_message(self, posts: list[dict], marketplace: str) -> str:
         """Форматирование сообщения для модерации"""
-
-        number_emojis = {
-            1: "1️⃣",
-            2: "2️⃣",
-            3: "3️⃣",
-            4: "4️⃣",
-            5: "5️⃣",
-            6: "6️⃣",
-            7: "7️⃣",
-            8: "8️⃣",
-            9: "9️⃣",
-            10: "🔟",
-        }
-
         lines = [f"📋 **МОДЕРАЦИЯ: {marketplace.upper()}**"]
         lines.append("_(Отсортировано по важности)_\n")
 
         for post in posts:
             idx = post["moderation_id"]
-            emoji = number_emojis.get(idx, f"{idx}️⃣")
+            emoji = NUMBER_EMOJIS.get(idx, f"{idx}️⃣")
 
             lines.append(f"{emoji} **{post['title']}**")
             lines.append(f"_{post['description'][:150]}..._")
@@ -1476,53 +1457,11 @@ class NewsProcessor:
 
     @staticmethod
     def _ensure_post_fields(post: dict) -> dict:
+        """QA-1: Fallback-форматирование для постов без title/description.
+
+        Делегирует в utils.formatters.ensure_post_fields.
         """
-        QA-1: Fallback-форматирование для постов без title/description
-
-        Гарантирует наличие обязательных полей в посте.
-        Если title или description отсутствуют, извлекаются из text.
-
-        Args:
-            post: Словарь с данными поста
-
-        Returns:
-            Валидированный пост с гарантированными полями title, description
-        """
-        # Проверяем наличие обязательных полей
-        if "title" not in post or not post["title"]:
-            # Извлекаем title из text
-            text = post.get("text", "")
-            if text:
-                # Берём первую строку или первые 7 слов
-                lines = text.split("\n", 1)
-                first_line = lines[0].strip()
-                words = first_line.split()
-                post["title"] = " ".join(words[:7]) if len(words) > 7 else first_line
-            else:
-                post["title"] = "Без заголовка"
-
-        if "description" not in post or not post["description"]:
-            # Извлекаем description из text
-            text = post.get("text", "")
-            if text:
-                # Берём всё кроме первой строки, или первые 200 символов
-                lines = text.split("\n", 1)
-                if len(lines) > 1:
-                    post["description"] = lines[1].strip()[:200]
-                else:
-                    # Если только одна строка, берём со 2го слова
-                    words = text.split()
-                    post["description"] = " ".join(words[7:]) if len(words) > 7 else text
-            else:
-                post["description"] = "Описание отсутствует"
-
-        # Ограничиваем длину description чтобы вместиться в лимит Telegram
-        # 10 новостей * ~350 символов = 3500 + header/footer ~500 = 4000 < 4096
-        MAX_DESCRIPTION_LENGTH = 250
-        if len(post.get("description", "")) > MAX_DESCRIPTION_LENGTH:
-            post["description"] = post["description"][:MAX_DESCRIPTION_LENGTH].rsplit(" ", 1)[0] + "..."
-
-        return post
+        return ensure_post_fields(post)
 
     async def publish_digest(
         self,
@@ -1559,24 +1498,11 @@ class NewsProcessor:
 
         lines = [header_line.strip() + "\n"]
 
-        number_emojis = {
-            1: "1️⃣",
-            2: "2️⃣",
-            3: "3️⃣",
-            4: "4️⃣",
-            5: "5️⃣",
-            6: "6️⃣",
-            7: "7️⃣",
-            8: "8️⃣",
-            9: "9️⃣",
-            10: "🔟",
-        }
-
         for idx, post in enumerate(posts, 1):
             # QA-1: Гарантируем наличие title/description
             post = self._ensure_post_fields(post)
 
-            emoji = number_emojis.get(idx, f"{idx}️⃣")
+            emoji = NUMBER_EMOJIS.get(idx, f"{idx}️⃣")
             lines.append(f"{emoji} **{post['title']}**\n")
             lines.append(f"{post['description']}\n")
 

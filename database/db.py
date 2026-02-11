@@ -30,7 +30,7 @@ def retry_on_locked(func):
             try:
                 return func(self, *args, **kwargs)
             except sqlite3.OperationalError as e:
-                if "database is locked" in str(e) and attempt < max_retries - 1:
+                if "locked" in str(e) and attempt < max_retries - 1:
                     delay = base_delay * (attempt + 1) * multiplier
                     logger.warning(
                         "БД заблокирована, попытка %s/%s, повтор через %.2f c",
@@ -73,25 +73,36 @@ class Database:
         self._retry_backoff_multiplier = max(0.0, float(retry_backoff_multiplier)) or 1.0
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
-        # Используем connection pool вместо одного соединения
+        # Connection pool для параллельного доступа
         self._pool = ConnectionPool(
             db_path,
-            max_connections=5,  # 5 соединений в пуле
+            max_connections=5,
             timeout=timeout,
             busy_timeout_ms=busy_timeout_ms
         )
 
-        self.conn: sqlite3.Connection | None = None  # Для обратной совместимости
+        self._conn: sqlite3.Connection | None = None  # Для обратной совместимости (тесты, reels)
         self._lock = threading.Lock()  # Thread safety для write operations
-        self._closed = False  # Track if connection was explicitly closed
+        self._closed = False
         self.init_db()
+
+    @property
+    def conn(self) -> sqlite3.Connection:
+        """Backward-compat: ленивая инициализация единственного соединения.
+
+        Используется тестами и внешним кодом (reels). Внутренние методы
+        Database используют пул через ``self._pool.get_connection()``.
+        """
+        if self._conn is None:
+            self._conn = self._pool._create_connection()
+        return self._conn
+
+    @conn.setter
+    def conn(self, value):
+        self._conn = value
 
     def connect(self):
         """Подключение к базе данных (для обратной совместимости)"""
-        # Для совместимости с существующим кодом
-        # В новом коде лучше использовать get_connection()
-        if self.conn is None:
-            self.conn = self._pool._create_connection()
         return self.conn
 
     def get_connection(self):
@@ -100,101 +111,99 @@ class Database:
 
     def init_db(self):
         """Создание таблиц если их нет"""
-        conn = self.connect()
-        cursor = conn.cursor()
+        with self._pool.get_connection() as conn:
+            cursor = conn.cursor()
 
-        # Таблица каналов
-        cursor.execute(
+            # Таблица каналов
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS channels (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT UNIQUE NOT NULL,
+                    title TEXT,
+                    is_active BOOLEAN DEFAULT 1,
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
             """
-            CREATE TABLE IF NOT EXISTS channels (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                title TEXT,
-                is_active BOOLEAN DEFAULT 1,
-                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """
-        )
 
-        # Таблица сырых сообщений
-        cursor.execute(
+            # Таблица сырых сообщений
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS raw_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    channel_id INTEGER NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    text TEXT NOT NULL,
+                    date TIMESTAMP NOT NULL,
+                    has_media BOOLEAN DEFAULT 0,
+                    processed BOOLEAN DEFAULT 0,
+                    is_duplicate BOOLEAN DEFAULT 0,
+                    gemini_score INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (channel_id) REFERENCES channels(id),
+                    UNIQUE(channel_id, message_id)
+                )
             """
-            CREATE TABLE IF NOT EXISTS raw_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                channel_id INTEGER NOT NULL,
-                message_id INTEGER NOT NULL,
-                text TEXT NOT NULL,
-                date TIMESTAMP NOT NULL,
-                has_media BOOLEAN DEFAULT 0,
-                processed BOOLEAN DEFAULT 0,
-                is_duplicate BOOLEAN DEFAULT 0,
-                gemini_score INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (channel_id) REFERENCES channels(id),
-                UNIQUE(channel_id, message_id)
             )
-        """
-        )
 
-        # Добавляем новое поле если его нет
-        cursor.execute("PRAGMA table_info(raw_messages)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if "rejection_reason" not in columns:
-            cursor.execute("ALTER TABLE raw_messages ADD COLUMN rejection_reason TEXT")
-            logger.info("Добавлено поле rejection_reason в raw_messages")
+            # Добавляем новое поле если его нет
+            cursor.execute("PRAGMA table_info(raw_messages)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if "rejection_reason" not in columns:
+                cursor.execute("ALTER TABLE raw_messages ADD COLUMN rejection_reason TEXT")
+                logger.info("Добавлено поле rejection_reason в raw_messages")
 
-        # Индексы для raw_messages
-        cursor.execute(
+            # Индексы для raw_messages
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_processed
+                ON raw_messages(processed, date)
             """
-            CREATE INDEX IF NOT EXISTS idx_processed
-            ON raw_messages(processed, date)
-        """
-        )
-        cursor.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_date
-            ON raw_messages(date)
-        """
-        )
-
-        # Таблица опубликованных постов
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS published (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                text TEXT NOT NULL,
-                embedding BLOB,
-                source_message_id INTEGER,
-                source_channel_id INTEGER,
-                published_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (source_message_id) REFERENCES raw_messages(id)
             )
-        """
-        )
-
-        cursor.execute(
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_date
+                ON raw_messages(date)
             """
-            CREATE INDEX IF NOT EXISTS idx_published_date
-            ON published(published_at)
-        """
-        )
-
-        # Миграция: удаляем дубликаты и добавляем UNIQUE constraint на source_message_id
-        # Это предотвращает публикацию одного сообщения дважды
-        self._migrate_published_unique_constraint(cursor)
-
-        # Таблица конфигурации
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS config (
-                key TEXT PRIMARY KEY,
-                value TEXT
             )
-        """
-        )
 
-        conn.commit()
-        logger.info(f"База данных инициализирована: {self.db_path}")
+            # Таблица опубликованных постов
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS published (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    text TEXT NOT NULL,
+                    embedding BLOB,
+                    source_message_id INTEGER,
+                    source_channel_id INTEGER,
+                    published_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (source_message_id) REFERENCES raw_messages(id)
+                )
+            """
+            )
+
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_published_date
+                ON published(published_at)
+            """
+            )
+
+            # Миграция: удаляем дубликаты и добавляем UNIQUE constraint на source_message_id
+            self._migrate_published_unique_constraint(cursor)
+
+            # Таблица конфигурации
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            """
+            )
+
+            logger.info(f"База данных инициализирована: {self.db_path}")
 
     def _migrate_published_unique_constraint(self, cursor: sqlite3.Cursor):
         """
@@ -208,7 +217,6 @@ class Database:
             "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_published_source_unique'"
         )
         if cursor.fetchone():
-            # Индекс уже существует, миграция не нужна
             return
 
         logger.info("🔄 Запуск миграции: добавление UNIQUE constraint на published")
@@ -228,7 +236,6 @@ class Database:
         if duplicate_count > 0:
             logger.warning(f"⚠️ Найдено {duplicate_count} дубликатов в published, удаляем...")
 
-            # Удаляем дубликаты, оставляя только последнюю запись для каждой пары
             cursor.execute("""
                 DELETE FROM published
                 WHERE id NOT IN (
@@ -240,7 +247,6 @@ class Database:
             """)
             logger.info(f"✅ Удалено {duplicate_count} дубликатов")
 
-        # Создаём уникальный индекс
         cursor.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_published_source_unique
             ON published(source_message_id, source_channel_id)
@@ -262,35 +268,32 @@ class Database:
         Returns:
             ID добавленного канала
         """
-        with self._lock:  # Sprint 6.2: Thread-safe доступ
-            username = username.lstrip("@")
-            cursor = self.conn.cursor()
-
+        username = username.lstrip("@")
+        with self._pool.get_connection() as conn:
+            cursor = conn.cursor()
             try:
                 cursor.execute(
                     "INSERT INTO channels (username, title) VALUES (?, ?)", (username, title)
                 )
-                self.conn.commit()
                 logger.info(f"Добавлен канал: @{username}")
                 return cursor.lastrowid
             except sqlite3.IntegrityError:
-                # Канал уже существует
                 cursor.execute("SELECT id FROM channels WHERE username = ?", (username,))
                 return cursor.fetchone()[0]
 
     def get_channel_id(self, username: str) -> int | None:
         """Получить ID канала по username"""
-        with self._lock:  # Sprint 6.2: Thread-safe доступ
-            username = username.lstrip("@")
-            cursor = self.conn.cursor()
+        username = username.lstrip("@")
+        with self._pool.get_connection() as conn:
+            cursor = conn.cursor()
             cursor.execute("SELECT id FROM channels WHERE username = ?", (username,))
             row = cursor.fetchone()
             return row[0] if row else None
 
     def get_active_channels(self) -> list[dict]:
         """Получить список активных каналов"""
-        with self._lock:  # Sprint 6.2: Thread-safe доступ
-            cursor = self.conn.cursor()
+        with self._pool.get_connection() as conn:
+            cursor = conn.cursor()
             cursor.execute("SELECT * FROM channels WHERE is_active = 1")
             return [dict(row) for row in cursor.fetchall()]
 
@@ -313,9 +316,8 @@ class Database:
         Returns:
             ID записи или None если уже существует
         """
-        with self._lock:  # Sprint 6.2: Thread-safe доступ
-            cursor = self.conn.cursor()
-
+        with self._pool.get_connection() as conn:
+            cursor = conn.cursor()
             try:
                 cursor.execute(
                     """
@@ -325,10 +327,8 @@ class Database:
                 """,
                     (channel_id, message_id, text, date, has_media),
                 )
-                self.conn.commit()
                 return cursor.lastrowid
             except sqlite3.IntegrityError:
-                # Сообщение уже существует
                 return None
 
     def get_unprocessed_messages(self, hours: int = 24) -> list[dict]:
@@ -341,8 +341,8 @@ class Database:
         Returns:
             Список сообщений
         """
-        with self._lock:  # Sprint 6.2: Thread-safe доступ
-            cursor = self.conn.cursor()
+        with self._pool.get_connection() as conn:
+            cursor = conn.cursor()
             # ИСПРАВЛЕНИЕ: используем UTC для сравнения, т.к. message.date хранится в UTC
             cutoff_time = now_utc() - timedelta(hours=hours)
 
@@ -377,8 +377,8 @@ class Database:
             gemini_score: Оценка Gemini (для публикаций)
             rejection_reason: Причина отклонения (если не опубликовано)
         """
-        with self._lock:  # Sprint 6.2: Thread-safe доступ
-            cursor = self.conn.cursor()
+        with self._pool.get_connection() as conn:
+            cursor = conn.cursor()
             cursor.execute(
                 """
                 UPDATE raw_messages
@@ -390,15 +390,11 @@ class Database:
             """,
                 (is_duplicate, gemini_score, rejection_reason, message_id),
             )
-            self.conn.commit()
 
     @retry_on_locked
     def mark_as_processed_batch(self, updates: list[dict]):
         """
         Батч-пометка сообщений как обработанные за одну транзакцию (Sprint 6.1)
-
-        Оптимизация: вместо N коммитов делаем 1 коммит на весь батч.
-        Решает проблему избыточных транзакций SQLite.
 
         Args:
             updates: Список словарей с полями:
@@ -406,47 +402,42 @@ class Database:
                 - is_duplicate: bool (по умолчанию False)
                 - gemini_score: int | None (по умолчанию None)
                 - rejection_reason: str | None (по умолчанию None)
-
-        Example:
-            updates = [
-                {'message_id': 1, 'rejection_reason': 'spam'},
-                {'message_id': 2, 'is_duplicate': True},
-                {'message_id': 3, 'gemini_score': 8},
-            ]
-            db.mark_as_processed_batch(updates)
         """
         if not updates:
             return
 
-        with self._lock:  # Sprint 6.2: Thread-safe доступ
-            cursor = self.conn.cursor()
+        with self._pool.get_connection() as conn:
+            cursor = conn.cursor()
 
-            # Подготавливаем данные для executemany
-            # Порядок: (is_duplicate, gemini_score, rejection_reason, message_id)
             batch_data = [
                 (
                     update.get('is_duplicate', False),
                     update.get('gemini_score'),
                     update.get('rejection_reason'),
-                    update['message_id']  # message_id обязателен
+                    update['message_id']
                 )
                 for update in updates
             ]
 
-            cursor.executemany(
-                """
-                UPDATE raw_messages
-                SET processed = 1,
-                    is_duplicate = ?,
-                    gemini_score = ?,
-                    rejection_reason = ?
-                WHERE id = ?
-            """,
-                batch_data
-            )
+            # Явная транзакция для атомарности батча
+            conn.execute("BEGIN")
+            try:
+                cursor.executemany(
+                    """
+                    UPDATE raw_messages
+                    SET processed = 1,
+                        is_duplicate = ?,
+                        gemini_score = ?,
+                        rejection_reason = ?
+                    WHERE id = ?
+                """,
+                    batch_data
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
 
-            # ОДИН commit на весь батч!
-            self.conn.commit()
             logger.debug(f"Batch processed {len(updates)} messages")
 
     # ====== РАБОТА С ОПУБЛИКОВАННЫМИ ПОСТАМИ ======
@@ -458,9 +449,6 @@ class Database:
         """
         Сохранить опубликованный пост
 
-        Использует INSERT OR IGNORE для предотвращения дублирования
-        (защита на уровне БД через UNIQUE индекс на source_message_id, source_channel_id)
-
         Args:
             text: Текст поста
             embedding: Embedding для проверки дубликатов
@@ -470,9 +458,8 @@ class Database:
         Returns:
             ID записи или -1 если запись уже существует (дубликат)
         """
-        with self._lock:  # Sprint 6.2: Thread-safe доступ
-            cursor = self.conn.cursor()
-            # Сериализуем embedding в bytes через numpy (безопасно, без pickle)
+        with self._pool.get_connection() as conn:
+            cursor = conn.cursor()
             buffer = io.BytesIO()
             np.save(buffer, embedding, allow_pickle=False)
             embedding_bytes = buffer.getvalue()
@@ -485,7 +472,6 @@ class Database:
             """,
                 (text, embedding_bytes, source_message_id, source_channel_id),
             )
-            self.conn.commit()
 
             if cursor.rowcount == 0:
                 logger.warning(
@@ -505,9 +491,8 @@ class Database:
         Returns:
             Список (id, embedding)
         """
-        with self._lock:  # Sprint 6.2: Thread-safe доступ
-            cursor = self.conn.cursor()
-            # ИСПРАВЛЕНИЕ: используем UTC, т.к. CURRENT_TIMESTAMP в SQLite = UTC
+        with self._pool.get_connection() as conn:
+            cursor = conn.cursor()
             cutoff_time = now_utc() - timedelta(days=days)
 
             cursor.execute(
@@ -520,7 +505,6 @@ class Database:
 
             results = []
             for row in cursor.fetchall():
-                # Десериализуем через numpy (безопасно, без pickle)
                 buffer = io.BytesIO(row[1])
                 embedding = np.load(buffer, allow_pickle=False)
                 results.append((row[0], embedding))
@@ -534,12 +518,11 @@ class Database:
         Args:
             embedding: Embedding текста для проверки
             threshold: Порог схожести (0.0 - 1.0)
-            days: FIX-DUPLICATE-6: Временное окно поиска дубликатов (по умолчанию 60 дней)
+            days: Временное окно поиска дубликатов (по умолчанию 60 дней)
 
         Returns:
             True если найден дубликат
         """
-        # Блокировка внутри get_published_embeddings
         published_embeddings = self.get_published_embeddings(days=days)
 
         if not published_embeddings:
@@ -577,23 +560,24 @@ class Database:
             raw_days: Удалить raw_messages старше N дней
             published_days: Удалить published старше N дней
         """
-        with self._lock:  # Sprint 6.2: Thread-safe доступ
-            cursor = self.conn.cursor()
+        with self._pool.get_connection() as conn:
+            cursor = conn.cursor()
 
-            # ИСПРАВЛЕНИЕ: используем UTC для обеих таблиц (даты хранятся в UTC)
             raw_cutoff = now_utc() - timedelta(days=raw_days)
             published_cutoff = now_utc() - timedelta(days=published_days)
 
-            # Удаляем старые сырые сообщения
-            cursor.execute("DELETE FROM raw_messages WHERE date < ?", (raw_cutoff,))
-            raw_deleted = cursor.rowcount
+            conn.execute("BEGIN")
+            try:
+                cursor.execute("DELETE FROM raw_messages WHERE date < ?", (raw_cutoff,))
+                raw_deleted = cursor.rowcount
 
-            # Удаляем старые опубликованные посты
-            cursor.execute("DELETE FROM published WHERE published_at < ?", (published_cutoff,))
-            published_deleted = cursor.rowcount
+                cursor.execute("DELETE FROM published WHERE published_at < ?", (published_cutoff,))
+                published_deleted = cursor.rowcount
 
-            # Коммитим транзакцию перед VACUUM
-            self.conn.commit()
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
 
             # VACUUM для сжатия БД (должен быть вне транзакции)
             cursor.execute("VACUUM")
@@ -606,8 +590,8 @@ class Database:
 
     def get_stats(self) -> dict:
         """Получить статистику по базе"""
-        with self._lock:  # Sprint 6.2: Thread-safe доступ
-            cursor = self.conn.cursor()
+        with self._pool.get_connection() as conn:
+            cursor = conn.cursor()
 
             stats = {}
 
@@ -636,34 +620,28 @@ class Database:
         Returns:
             dict со статистикой
         """
-        with self._lock:  # Sprint 6.2: Thread-safe доступ
-            cursor = self.conn.cursor()
+        with self._pool.get_connection() as conn:
+            cursor = conn.cursor()
             stats = {}
 
             # Определяем границы "сегодня" в нужной timezone
             if timezone_name:
                 tz = get_timezone(timezone_name)
                 now = now_in_timezone(tz)
-                # Начало дня в локальной timezone
                 start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-                # Конец дня в локальной timezone
                 end_of_day = start_of_day + timedelta(days=1)
-                # Конвертируем в UTC для запросов к БД
                 start_utc = to_utc(start_of_day)
                 end_utc = to_utc(end_of_day)
             else:
-                # Fallback: используем UTC
                 from datetime import UTC
 
-                now_utc = datetime.now(UTC)
-                start_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+                now_utc_val = datetime.now(UTC)
+                start_utc = now_utc_val.replace(hour=0, minute=0, second=0, microsecond=0)
                 end_utc = start_utc + timedelta(days=1)
 
-            # Форматируем для SQL (SQLite хранит timestamps как строки или числа)
             start_str = start_utc.strftime("%Y-%m-%d %H:%M:%S")
             end_str = end_utc.strftime("%Y-%m-%d %H:%M:%S")
 
-            # Сообщения, собранные сегодня
             cursor.execute(
                 """
                 SELECT COUNT(*) FROM raw_messages
@@ -673,7 +651,6 @@ class Database:
             )
             stats["messages_today"] = cursor.fetchone()[0]
 
-            # Обработанные сегодня (created_at - когда добавлено в БД, дата обработки)
             cursor.execute(
                 """
                 SELECT COUNT(*) FROM raw_messages
@@ -683,7 +660,6 @@ class Database:
             )
             stats["processed_today"] = cursor.fetchone()[0]
 
-            # Необработанные
             cursor.execute(
                 """
                 SELECT COUNT(*) FROM raw_messages
@@ -692,7 +668,6 @@ class Database:
             )
             stats["unprocessed"] = cursor.fetchone()[0]
 
-            # Опубликованные сегодня
             cursor.execute(
                 """
                 SELECT COUNT(*) FROM published
@@ -702,15 +677,12 @@ class Database:
             )
             stats["published_today"] = cursor.fetchone()[0]
 
-            # Активные каналы
             cursor.execute("SELECT COUNT(*) FROM channels WHERE is_active = 1")
             stats["active_channels"] = cursor.fetchone()[0]
 
-            # Всего сообщений
             cursor.execute("SELECT COUNT(*) FROM raw_messages")
             stats["total_messages"] = cursor.fetchone()[0]
 
-            # Всего опубликованных
             cursor.execute("SELECT COUNT(*) FROM published")
             stats["total_published"] = cursor.fetchone()[0]
 
@@ -720,16 +692,22 @@ class Database:
         """Закрыть соединение с БД (idempotent, thread-safe)"""
         with self._lock:
             if self._closed:
-                return  # Already closed
-            if self.conn:
+                return
+            # Закрываем backward-compat соединение если есть
+            if self._conn:
                 try:
-                    self.conn.close()
-                    logger.info("Соединение с БД закрыто")
+                    self._conn.close()
                 except Exception as e:
                     logger.error(f"Ошибка при закрытии соединения: {e}")
                 finally:
-                    self.conn = None
-                    self._closed = True
+                    self._conn = None
+            # Закрываем весь пул
+            try:
+                self._pool.close_all()
+                logger.info("Connection pool и БД закрыты")
+            except Exception as e:
+                logger.error(f"Ошибка при закрытии пула: {e}")
+            self._closed = True
 
     def __enter__(self):
         """Context manager support"""
@@ -745,4 +723,4 @@ class Database:
         try:
             self.close()
         except Exception:
-            pass  # Suppress errors during cleanup
+            pass

@@ -86,11 +86,20 @@ class ConnectionPool:
         }
         self._stats_lock = threading.Lock()
 
-        # Создаём директорию если нужно
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # Для :memory: используем shared cache чтобы все соединения видели одну БД
+        self._is_memory = str(self.db_path) == ":memory:"
+        if self._is_memory:
+            self._connect_str = "file::memory:?cache=shared"
+            self._connect_kwargs = {"uri": True}
+        else:
+            self._connect_str = str(self.db_path)
+            self._connect_kwargs = {}
+            # Создаём директорию если нужно
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Инициализируем WAL mode
-        self._initialize_wal_mode()
+        # Инициализируем WAL mode (пропускаем для :memory:)
+        if not self._is_memory:
+            self._initialize_wal_mode()
 
         logger.info(
             f"Connection pool инициализирован: {self.db_path}, "
@@ -105,7 +114,7 @@ class ConnectionPool:
         Вызывается один раз при создании пула.
         """
         try:
-            conn = sqlite3.connect(str(self.db_path), timeout=self.timeout)
+            conn = sqlite3.connect(self._connect_str, timeout=self.timeout, **self._connect_kwargs)
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")  # Оптимизация для WAL
             conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
@@ -124,10 +133,11 @@ class ConnectionPool:
             Новое соединение к SQLite БД
         """
         conn = sqlite3.connect(
-            str(self.db_path),
+            self._connect_str,
             timeout=self.timeout,
             check_same_thread=False,  # Thread-safe соединение
             isolation_level=None,  # Autocommit mode для лучшей производительности
+            **self._connect_kwargs,
         )
 
         # Применяем оптимизации

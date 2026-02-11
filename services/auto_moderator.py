@@ -178,8 +178,9 @@ class AutoModerator:
         seen_embeddings: list[np.ndarray] = []
 
         # Создаём embeddings для всех постов за один batch-вызов
+        # Используем оригинальный text для точной дедупликации (LLM-генерированные title/description могут отличаться)
         texts = [
-            f"{post.get('title', '')} {post.get('description', '')}"
+            post.get('text', f"{post.get('title', '')} {post.get('description', '')}")
             for post in posts
         ]
 

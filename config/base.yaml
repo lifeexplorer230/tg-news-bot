@@ -34,7 +34,7 @@ llm:
   provider: gemini
 
 gemini:
-  model: gemini-2.0-flash-exp  # Модель Gemini API
+  model: gemini-2.0-flash  # Модель Gemini API (exp была убрана Google)
   max_tokens: 2048           # Максимальное количество токенов в ответе
   temperature: 0.7           # Температура генерации (0-1, выше = креативнее)
   prompts:                   # Пути к промптам для разных задач

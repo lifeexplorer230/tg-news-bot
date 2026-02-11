@@ -43,6 +43,9 @@ class FakeConfig:
                 return default
         return value
 
+    def get_env(self, key, default=""):
+        return default
+
     def database_settings(self):
         return {}
 
