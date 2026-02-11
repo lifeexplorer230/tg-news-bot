@@ -20,6 +20,7 @@ from tenacity import (
     wait_exponential,
 )
 
+from utils.formatters import sanitize_for_prompt
 from utils.logger import setup_logger
 from services.gemini_cache import GeminiCache
 
@@ -40,16 +41,6 @@ class NewsItem(BaseModel):
     text: str | None = None
     marketplace: str | None = None
     category: str | None = None
-
-
-class CategoryNews(BaseModel):
-    """Pydantic-модель для валидации новостей по категориям маркетплейсов."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    wildberries: list[NewsItem] = Field(default_factory=list)
-    ozon: list[NewsItem] = Field(default_factory=list)
-    general: list[NewsItem] = Field(default_factory=list)
 
 
 class DynamicCategoryNews(BaseModel):
@@ -331,7 +322,7 @@ class GeminiClient:
         parts = []
         for msg in messages:
             text = msg.get("text") or ""
-            snippet = text[:text_limit]
+            snippet = sanitize_for_prompt(text, max_length=text_limit)
             channel = msg.get("channel_username", "unknown")
             parts.append(f"ID: {msg.get('id')}\nКанал: @{channel}\nТекст:\n{snippet}")
         block = "\n\n".join(parts)
@@ -550,7 +541,7 @@ class GeminiClient:
         prompt = self._render_prompt(
             "format_news_post",
             DEFAULT_FORMAT_NEWS_POST_PROMPT,
-            text=self._escape_braces(text),
+            text=self._escape_braces(sanitize_for_prompt(text)),
             source_link=self._escape_braces(effective_link),
         )
 
@@ -688,10 +679,11 @@ class GeminiClient:
         Returns:
             True если это спам/реклама
         """
+        safe_text = sanitize_for_prompt(text, max_length=500)
         prompt = f"""Определи, несёт ли сообщение пользу продавцам маркетплейсов или это реклама/спам.
 
 ТЕКСТ:
-{text[:500]}
+{safe_text}
 
 Считай спамом, если упоминаются платные курсы, менторы, агентские услуги, накрутки, продажа аккаунтов или контент никак не помогает селлерам.
 Если в тексте есть конкретные факты, правила, цифры или полезные инструкции — это не спам.
@@ -954,9 +946,18 @@ class GeminiClient:
                     return {"wildberries": [], "ozon": [], "general": []}
 
             categories = json.loads(result_text)
+            expected = ["wildberries", "ozon", "general"]
             try:
-                validated_categories = CategoryNews(**categories)
-                categories = validated_categories.model_dump()
+                validated = DynamicCategoryNews(**categories)
+                categories = {
+                    cat: getattr(validated, cat, [])
+                    for cat in expected
+                }
+                categories = {
+                    cat: [item.model_dump() if isinstance(item, NewsItem) else item
+                          for item in items]
+                    for cat, items in categories.items()
+                }
             except ValidationError as e:
                 logger.error(f"Ошибка валидации JSON от Gemini (3 категории, chunk): {e}")
                 return {"wildberries": [], "ozon": [], "general": []}

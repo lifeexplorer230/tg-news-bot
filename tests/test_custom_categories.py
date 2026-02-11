@@ -36,6 +36,39 @@ class TestCustomCategories:
         assert len(model.movies) == 1
         assert isinstance(model.gaming[0], NewsItem)
 
+    def test_dynamic_category_news_with_marketplace_names(self):
+        """DynamicCategoryNews работает с фиксированными marketplace-категориями (wildberries/ozon/general)"""
+        data = {
+            "wildberries": [
+                {"id": 1, "title": "WB Sale", "description": "Big sale on WB", "score": 7}
+            ],
+            "ozon": [
+                {"id": 2, "title": "Ozon Update", "description": "Ozon news", "score": 8}
+            ],
+            "general": [],
+        }
+
+        model = DynamicCategoryNews(**data)
+        assert len(model.wildberries) == 1
+        assert len(model.ozon) == 1
+        assert len(model.general) == 0
+        assert isinstance(model.wildberries[0], NewsItem)
+        assert model.wildberries[0].title == "WB Sale"
+
+        # Проверяем конвертацию обратно в dict (как в _process_categories_chunk)
+        expected = ["wildberries", "ozon", "general"]
+        categories = {
+            cat: getattr(model, cat, [])
+            for cat in expected
+        }
+        categories = {
+            cat: [item.model_dump() if isinstance(item, NewsItem) else item
+                  for item in items]
+            for cat, items in categories.items()
+        }
+        assert categories["wildberries"][0]["title"] == "WB Sale"
+        assert categories["general"] == []
+
     def test_ensure_post_fields_with_missing_title(self):
         """QA-1: _ensure_post_fields добавляет title если отсутствует"""
         post = {

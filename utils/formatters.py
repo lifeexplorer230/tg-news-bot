@@ -1,6 +1,47 @@
+import re
 from datetime import date
 
 from utils.constants import NUMBER_EMOJIS
+
+
+# Паттерны, характерные для prompt injection
+_INJECTION_PATTERNS = re.compile(
+    r"(?i)"
+    r"(?:ignore|disregard|forget|override)\s+(?:(?:previous|above|all|prior|earlier)\s+){1,2}(?:instructions?|prompts?|rules?|context)"
+    r"|(?:you\s+are\s+now|new\s+instructions?|system\s*:)"
+    r"|(?:assistant\s*:)"
+    r"|(?:<<\s*(?:SYS|INST|sys|inst)\s*>>)"
+    r"|(?:\[INST\]|\[/INST\])"
+)
+
+
+def sanitize_for_prompt(text: str, max_length: int = 2000) -> str:
+    """Санитизация пользовательского текста перед вставкой в LLM-промпт.
+
+    1. Обрезает до max_length символов.
+    2. Удаляет известные prompt injection паттерны.
+    3. Удаляет непечатаемые управляющие символы (кроме \\n, \\t).
+
+    Args:
+        text: Исходный текст (может быть из внешнего Telegram-канала).
+        max_length: Максимальная длина текста.
+
+    Returns:
+        Очищенный текст, безопасный для вставки в промпт.
+    """
+    if not text:
+        return ""
+
+    # Обрезаем
+    text = text[:max_length]
+
+    # Удаляем управляющие символы кроме \n и \t
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+
+    # Заменяем injection-паттерны на [FILTERED]
+    text = _INJECTION_PATTERNS.sub("[FILTERED]", text)
+
+    return text
 
 
 def format_categories_moderation_message(categories: dict[str, list[dict]]) -> str:

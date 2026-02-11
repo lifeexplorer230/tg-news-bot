@@ -296,3 +296,37 @@ def test_valid_config_passes_validation(tmp_path, monkeypatch, minimal_valid_con
     assert cfg.telegram_api_id == 12345
     assert len(cfg.telegram_api_hash) == 32
     assert cfg.telegram_phone.startswith("+")
+
+
+def test_status_bot_token_optional(tmp_path, monkeypatch, minimal_valid_config, valid_env):
+    """STATUS_BOT_TOKEN опционален — Config работает без него"""
+    monkeypatch.delenv("STATUS_BOT_TOKEN", raising=False)
+    config_dir = minimal_valid_config
+
+    cfg = Config(
+        base_path=config_dir / "base.yaml",
+        profiles_dir=config_dir / "profiles",
+        env_path=tmp_path / ".env",
+    )
+    assert cfg.profile == "test"
+
+
+def test_empty_required_env_gives_clear_error(tmp_path, monkeypatch, minimal_valid_config):
+    """Config с пустыми обязательными env → понятная ошибка ValueError"""
+    # Не устанавливаем обязательные переменные
+    monkeypatch.delenv("TELEGRAM_API_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_API_HASH", raising=False)
+    monkeypatch.delenv("TELEGRAM_PHONE", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    config_dir = minimal_valid_config
+
+    with pytest.raises(ValueError) as exc_info:
+        Config(
+            base_path=config_dir / "base.yaml",
+            profiles_dir=config_dir / "profiles",
+            env_path=tmp_path / ".env",
+        )
+
+    error_msg = str(exc_info.value)
+    assert "❌ Ошибка валидации env переменных" in error_msg
