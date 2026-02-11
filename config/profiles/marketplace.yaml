@@ -32,7 +32,7 @@ filters:
     - обучение платное
 
 processor:
-  schedule_time: '09:00'
+  schedule_time: '06:00'  # 06:00 UTC = 09:00 MSK
   timezone: Europe/Moscow
   duplicate_threshold: 0.85
   top_n: 15
@@ -118,7 +118,7 @@ status:
   chat: '@SoftStatustnb'
   bot_name: Marketplace News Bot
   interval_minutes: 30
-  bot_token: '8293385906:AAFzdn_kWnSVVrPRoYADRzpr9HQooFQyKgQ'  # @statusTNBbot
+  bot_token: ''  # Вынесен в .env как STATUS_BOT_TOKEN
   timezone: Europe/Moscow
 
 logging:

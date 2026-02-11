@@ -6,7 +6,7 @@ telegram:
   # ВАЖНО: использовать отдельный аккаунт (не тот же что для AI News Bot)
 
 gemini:
-  model: gemini-2.0-flash-exp
+  model: gemini-2.0-flash
   max_tokens: 2048
   temperature: 0.7
 

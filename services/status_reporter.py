@@ -190,8 +190,11 @@ class StatusReporter:
             else:
                 message = self._build_default_message(context)
 
-            # Проверяем наличие bot_token для избежания конфликтов сессий
-            bot_token = self.config.get("status.bot_token", "").strip()
+            # Проверяем наличие bot_token: сначала env, потом yaml
+            bot_token = (
+                self.config.get_env("STATUS_BOT_TOKEN", "")
+                or self.config.get("status.bot_token", "")
+            ).strip()
 
             if bot_token:
                 # Используем Bot API (рекомендуется)
