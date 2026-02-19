@@ -1586,14 +1586,20 @@ class NewsProcessor:
         post_ids = []
         # Sprint 6.3: Неблокирующий доступ к БД
         for post, embedding in zip(posts, embeddings_array):
-            await asyncio.to_thread(
-                self.db.save_published,
-                text=post["text"],
-                embedding=embedding,
-                source_message_id=post["source_message_id"],
-                source_channel_id=post["source_channel_id"],
-            )
-            post_ids.append(post["source_message_id"])
+            try:
+                await asyncio.to_thread(
+                    self.db.save_published,
+                    text=post["text"],
+                    embedding=embedding,
+                    source_message_id=post["source_message_id"],
+                    source_channel_id=post["source_channel_id"],
+                )
+                post_ids.append(post["source_message_id"])
+            except Exception as e:
+                logger.error(
+                    f"Ошибка сохранения поста {post.get('source_message_id')}: {e}",
+                    exc_info=True,
+                )
 
         logger.info(f"💾 Сохранено {len(posts)} embeddings в БД")
 
