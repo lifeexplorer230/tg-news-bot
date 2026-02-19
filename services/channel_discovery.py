@@ -141,6 +141,16 @@ class ChannelDiscovery:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS discovery_checked (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL,
+                    profile TEXT NOT NULL,
+                    result TEXT NOT NULL,
+                    checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(username, profile)
+                )
+            """)
 
     # ── Подключение / отключение ──────────────────────────────────────
 
@@ -184,6 +194,24 @@ class ChannelDiscovery:
             ).fetchall()
             return {r[0].lower() for r in rows}
 
+    def _get_checked_usernames(self) -> set[str]:
+        """Юзернеймы каналов, которые уже проверялись (discovery_checked)."""
+        with self.db._pool.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT username FROM discovery_checked WHERE profile = ?",
+                (self.profile,),
+            ).fetchall()
+            return {r[0].lower() for r in rows}
+
+    def _save_check_result(self, username: str, result: str):
+        """Сохранить результат проверки (rejected_quick, rejected_deep, dead, approved)."""
+        with self.db._pool.get_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO discovery_checked "
+                "(username, profile, result, checked_at) VALUES (?, ?, ?, ?)",
+                (username.lower(), self.profile, result, datetime.now(UTC)),
+            )
+
     # ══════════════════════════════════════════════════════════════════
     #  1. ПОИСК ЧЕРЕЗ РЕКОМЕНДАЦИИ
     # ══════════════════════════════════════════════════════════════════
@@ -196,11 +224,13 @@ class ChannelDiscovery:
         seed_channels = self.db.get_active_channels()
         existing = {ch["username"].lower() for ch in seed_channels}
         known = self._get_known_usernames()
-        skip = existing | known
+        checked = self._get_checked_usernames()
+        skip = existing | known | checked
 
         logger.info(
             f"Поиск рекомендаций: {len(seed_channels)} каналов, "
-            f"пропускаем {len(skip)} известных"
+            f"пропускаем {len(skip)} известных (подписаны: {len(existing)}, "
+            f"проверены ранее: {len(checked)})"
         )
 
         candidates: dict[str, dict] = {}
@@ -334,6 +364,7 @@ class ChannelDiscovery:
             quick_prompt = self.prompts["quick"].format(title=candidate["title"])
             if not await self._gemini_check(quick_prompt):
                 logger.info(f"  @{username} — quick check: НЕТ")
+                self._save_check_result(username, "rejected_quick")
                 return False
             logger.info(f"  @{username} — quick check: ДА")
 
@@ -341,6 +372,7 @@ class ChannelDiscovery:
             web_data = await self._fetch_channel_web(username)
             if not web_data:
                 logger.info(f"  @{username} — не удалось загрузить с t.me")
+                self._save_check_result(username, "no_web_data")
                 return False
 
             # Alive check
@@ -349,10 +381,12 @@ class ChannelDiscovery:
                 days_since = (datetime.now(UTC) - latest.replace(tzinfo=UTC)).days
                 if days_since > CHANNEL_ALIVE_DAYS:
                     logger.info(f"  @{username} — последний пост {days_since}д назад")
+                    self._save_check_result(username, "dead")
                     return False
                 candidate["last_post_date"] = latest.isoformat()
             else:
                 logger.info(f"  @{username} — нет дат постов")
+                self._save_check_result(username, "no_dates")
                 return False
 
             candidate["subscribers"] = web_data["subscribers"]
@@ -367,12 +401,14 @@ class ChannelDiscovery:
             )
             if not await self._gemini_check(deep_prompt):
                 logger.info(f"  @{username} — deep check: НЕТ")
+                self._save_check_result(username, "rejected_deep")
                 return False
 
             subs = candidate["subscribers"]
             logger.info(f"  @{username} — deep check: ДА ({subs} подписчиков)")
             candidate["scoring"] = 100
             candidate["topic_relevance_pct"] = 100.0
+            self._save_check_result(username, "approved")
             return True
 
         except Exception as e:
