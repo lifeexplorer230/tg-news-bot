@@ -155,6 +155,7 @@ class Config:
                 "MY_CHANNEL": self._get_env_with_profile("MY_CHANNEL"),
                 "MY_PERSONAL_ACCOUNT": self._get_env_with_profile("MY_PERSONAL_ACCOUNT"),
                 "STATUS_BOT_TOKEN": os.getenv("STATUS_BOT_TOKEN", ""),
+                "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY", ""),
             }
             # Валидируем через Pydantic
             EnvConfig(**env_vars)
@@ -260,6 +261,7 @@ class Config:
         self.my_channel = self._get_env_with_profile("MY_CHANNEL")
         self.my_personal_account = self._get_env_with_profile("MY_PERSONAL_ACCOUNT")
         self.gemini_api_key = os.getenv("GEMINI_API_KEY", "")
+        self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
 
     # ------------------------------------------------------------------
     # Публичные методы и свойства
@@ -316,7 +318,13 @@ class Config:
         if prompt_key in self._prompt_cache:
             return self._prompt_cache[prompt_key]
 
-        prompt_path = self.get(f"gemini.prompts.{prompt_key}")
+        # Try provider-specific path first, then fallback to gemini
+        provider = self.get("llm.provider", "gemini")
+        prompt_path = self.get(f"{provider}.prompts.{prompt_key}")
+        if not prompt_path:
+            prompt_path = self.get(f"claude.prompts.{prompt_key}")
+        if not prompt_path:
+            prompt_path = self.get(f"gemini.prompts.{prompt_key}")
         if not prompt_path:
             return None
 
