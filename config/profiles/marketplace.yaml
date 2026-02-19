@@ -31,6 +31,13 @@ filters:
     - промокод
     - обучение платное
 
+llm:
+  provider: claude
+
+claude:
+  prompts:
+    select_dynamic_categories: prompts/marketplace_categories_claude.md
+
 processor:
   schedule_time: '06:00'  # 06:00 UTC = 09:00 MSK
   timezone: Europe/Moscow

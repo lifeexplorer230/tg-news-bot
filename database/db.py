@@ -481,6 +481,35 @@ class Database:
                 return -1
             return cursor.lastrowid
 
+
+    def get_recently_published_texts(self, days: int = 7, limit: int = 30) -> list[dict]:
+        """
+        Получить тексты недавно опубликованных новостей для тематической памяти.
+
+        Args:
+            days: Количество дней назад
+            limit: Максимальное количество записей
+
+        Returns:
+            Список словарей с text (обрезан до 150 символов) и published_at
+        """
+        with self._pool.get_connection() as conn:
+            cursor = conn.cursor()
+            cutoff_time = now_utc() - timedelta(days=days)
+            cursor.execute(
+                """
+                SELECT text, published_at FROM published
+                WHERE published_at > ?
+                ORDER BY published_at DESC
+                LIMIT ?
+                """,
+                (cutoff_time, limit),
+            )
+            return [
+                {"text": row[0][:150] if row[0] else "", "published_at": row[1]}
+                for row in cursor.fetchall()
+            ]
+
     def get_published_embeddings(self, days: int = 60) -> list[tuple[int, np.ndarray]]:
         """
         Получить embeddings опубликованных постов за последние N дней

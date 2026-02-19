@@ -10,6 +10,7 @@ from database.db import Database
 from models.category import Category
 from services.embeddings import EmbeddingService
 from services.gemini_client import GeminiClient
+from services.llm import create_llm_client, LLMClient
 from services.auto_moderator import AutoModerator, ModerationResult
 from utils.config import Config
 from utils.constants import NUMBER_EMOJIS
@@ -35,6 +36,7 @@ class NewsProcessor:
         self.db = Database(config.db_path, **config.database_settings())
         self._embedding_service: EmbeddingService | None = None
         self._gemini_client: GeminiClient | None = None
+        self._llm_client: LLMClient | None = None
 
         # Security: Многоуровневый rate limiter для защиты от Telegram API limits
         # Включает global limits, burst protection, per-chat limits
@@ -191,6 +193,12 @@ class NewsProcessor:
                 prompt_loader=self.config.load_prompt,
             )
         return self._gemini_client
+
+    @property
+    def llm_client(self) -> LLMClient:
+        if self._llm_client is None:
+            self._llm_client = create_llm_client(self.config)
+        return self._llm_client
 
     # СТАРАЯ СИСТЕМА УДАЛЕНА: метод process_category() больше не используется
     # Используется только 3-категорийная система через process_all_categories()
@@ -731,13 +739,21 @@ class NewsProcessor:
             logger.warning("Все сообщения являются дубликатами")
             return
 
-        # ШАГ 4: Отбор по категориям через Gemini (динамическая система)
+        # ШАГ 4: Тематическая память — получаем недавно опубликованные темы
+        recently_published_raw = await asyncio.to_thread(
+            self.db.get_recently_published_texts, 7, 30
+        )
+        topic_summaries = [item["text"] for item in recently_published_raw] if recently_published_raw else None
+        if topic_summaries:
+            logger.info(f"Тематическая память: {len(topic_summaries)} недавних тем загружено")
+
+        # ШАГ 5: Отбор по категориям через LLM (Claude/Gemini по конфигу)
         # Поддерживает любые категории из конфига, не только marketplace-специфичные
-        # Sprint 6.5: Неблокирующие LLM вызовы
         categories = await asyncio.to_thread(
-            self.gemini.select_by_categories,
+            self.llm_client.select_by_categories,
             unique_messages,
             category_counts=self.all_digest_counts,
+            recently_published=topic_summaries,
         )
 
         # Подсчитываем сколько получилось (динамически для всех категорий)
@@ -746,7 +762,7 @@ class NewsProcessor:
 
         # Формируем красивый лог с категориями
         stats_str = ", ".join(f"{cat}={count}" for cat, count in category_stats.items())
-        logger.info(f"Gemini отобрал: {stats_str}, Всего={total_count}")
+        logger.info(f"LLM отобрал: {stats_str}, Всего={total_count}")
 
         selected_ids = {
             post["source_message_id"]
@@ -1496,20 +1512,9 @@ class NewsProcessor:
             )
             header_line = f"📌 Главные новости {header_name} за {date_str}"
 
-        lines = [header_line.strip() + "\n"]
-
-        for idx, post in enumerate(posts, 1):
-            # QA-1: Гарантируем наличие title/description
-            post = self._ensure_post_fields(post)
-
-            emoji = NUMBER_EMOJIS.get(idx, f"{idx}️⃣")
-            lines.append(f"{emoji} **{post['title']}**\n")
-            lines.append(f"{post['description']}\n")
-
-            if post.get("source_link"):
-                lines.append(f"{post['source_link']}\n")
-
+        # Вычисляем footer
         footer = self.publication_footer_template.strip()
+        footer_text = ""
         if footer:
             try:
                 footer_text = footer.format(**context)
@@ -1518,9 +1523,40 @@ class NewsProcessor:
                     "Не удалось подставить параметры в publication.footer_template: %s", exc
                 )
                 footer_text = footer
-            lines.append(footer_text)
 
-        digest = "\n".join(lines)
+        # Пробуем переписать дайджест через LLM (второй проход Claude)
+        digest = ""
+        lines = None
+        try:
+            rewritten = await asyncio.to_thread(
+                self.llm_client.rewrite_digest,
+                posts,
+                header_line.strip(),
+                footer_text,
+            )
+            if rewritten:
+                digest = rewritten
+                logger.info("\u270d\ufe0f Дайджест переписан через LLM (%d символов)", len(digest))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("LLM rewrite_digest не удался, используем шаблон: %s", exc)
+
+        # Fallback: шаблонное форматирование
+        if not digest:
+            lines = [header_line.strip() + "\n"]
+
+            for idx, post in enumerate(posts, 1):
+                post = self._ensure_post_fields(post)
+                emoji = NUMBER_EMOJIS.get(idx, f"{idx}" + "\ufe0f\u20e3")
+                lines.append(f"{emoji} **{post['title']}**\n")
+                lines.append(f"{post['description']}\n")
+
+                if post.get("source_link"):
+                    lines.append(f"{post['source_link']}\n")
+
+            if footer_text:
+                lines.append(footer_text)
+
+            digest = "\n".join(lines)
 
         # Защита от превышения лимита Telegram (4096 символов)
         if len(digest) > self.TELEGRAM_MESSAGE_LIMIT:
@@ -1528,7 +1564,9 @@ class NewsProcessor:
                 f"⚠️ Дайджест превышает лимит Telegram ({len(digest)} > {self.TELEGRAM_MESSAGE_LIMIT}). "
                 "Разбиваем на части."
             )
-            # Разбиваем на части: header + первые N новостей, затем остальные + footer
+            # Для Claude-дайджеста lines может не существовать — разбиваем сам digest
+            if lines is None:
+                lines = digest.split("\n")
             digest_parts = self._split_digest_by_limit(lines, self.TELEGRAM_MESSAGE_LIMIT)
         else:
             digest_parts = [digest]

@@ -33,6 +33,14 @@ publication:
 llm:
   provider: gemini
 
+claude:
+  model: claude-sonnet-4-6
+  max_tokens: 4096
+  temperature: 0.3
+  prompts:
+    select_dynamic_categories: prompts/select_ceo_categories_claude.md
+    rewrite_digest: prompts/rewrite_digest_claude.md
+
 gemini:
   model: gemini-2.0-flash  # Модель Gemini API (exp была убрана Google)
   max_tokens: 2048           # Максимальное количество токенов в ответе

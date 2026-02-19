@@ -73,10 +73,10 @@ PROFILE_PROMPTS = {
 
 # ── Лимиты антиблокировки ─────────────────────────────────────────────
 
-MAX_SUBSCRIPTIONS_PER_DAY = 20
+MAX_SUBSCRIPTIONS_PER_DAY = 200
 MAX_UNSUBSCRIPTIONS_PER_DAY = 5
-SUBSCRIBE_DELAY_MIN = 120   # между подписками
-SUBSCRIBE_DELAY_MAX = 300
+SUBSCRIBE_DELAY_MIN = 7    # между подписками (10±3с)
+SUBSCRIBE_DELAY_MAX = 13
 API_DELAY_MIN = 5            # между чтениями Telegram API
 API_DELAY_MAX = 10
 CHANNEL_ALIVE_DAYS = 14      # канал «мёртв» если последний пост старше
@@ -151,6 +151,16 @@ class ChannelDiscovery:
                     UNIQUE(username, profile)
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS discovery_rec_sources (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL,
+                    profile TEXT NOT NULL,
+                    recs_count INTEGER DEFAULT 0,
+                    scanned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(username, profile)
+                )
+            """)
 
     # ── Подключение / отключение ──────────────────────────────────────
 
@@ -212,6 +222,24 @@ class ChannelDiscovery:
                 (username.lower(), self.profile, result, datetime.now(UTC)),
             )
 
+    def _get_scanned_sources(self) -> set[str]:
+        """Каналы, с которых уже собирали рекомендации."""
+        with self.db._pool.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT username FROM discovery_rec_sources WHERE profile = ?",
+                (self.profile,),
+            ).fetchall()
+            return {r[0].lower() for r in rows}
+
+    def _save_scanned_source(self, username: str, recs_count: int):
+        """Отметить канал как просканированный для рекомендаций."""
+        with self.db._pool.get_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO discovery_rec_sources "
+                "(username, profile, recs_count, scanned_at) VALUES (?, ?, ?, ?)",
+                (username.lower(), self.profile, recs_count, datetime.now(UTC)),
+            )
+
     # ══════════════════════════════════════════════════════════════════
     #  1. ПОИСК ЧЕРЕЗ РЕКОМЕНДАЦИИ
     # ══════════════════════════════════════════════════════════════════
@@ -220,38 +248,47 @@ class ChannelDiscovery:
         """
         Для каждого подписанного канала берём рекомендации Telegram.
         Фильтруем уже подписанных и ранее проверенных.
+        Пропускаем каналы, с которых уже собирали рекомендации.
         """
         seed_channels = self.db.get_active_channels()
         existing = {ch["username"].lower() for ch in seed_channels}
         known = self._get_known_usernames()
         checked = self._get_checked_usernames()
+        scanned = self._get_scanned_sources()
         skip = existing | known | checked
 
+        # Фильтруем источники — только те, с которых ещё не собирали
+        new_seeds = [ch for ch in seed_channels if ch["username"].lower() not in scanned]
+
         logger.info(
-            f"Поиск рекомендаций: {len(seed_channels)} каналов, "
-            f"пропускаем {len(skip)} известных (подписаны: {len(existing)}, "
+            f"Поиск рекомендаций: {len(new_seeds)} новых из {len(seed_channels)} каналов "
+            f"(уже просканировано: {len(scanned)}), "
+            f"пропускаем {len(skip)} известных кандидатов (подписаны: {len(existing)}, "
             f"проверены ранее: {len(checked)})"
         )
 
         candidates: dict[str, dict] = {}
 
-        for i, ch in enumerate(seed_channels):
+        for i, ch in enumerate(new_seeds):
             username = ch["username"]
             try:
                 entity = await self.client.get_entity(username)
                 if not isinstance(entity, Channel):
+                    self._save_scanned_source(username, 0)
                     continue
 
                 result = await self.client(
                     GetChannelRecommendationsRequest(channel=entity)
                 )
 
+                recs_found = 0
                 for chat in result.chats:
                     if not isinstance(chat, Channel) or chat.megagroup:
                         continue
                     rec_username = chat.username
                     if not rec_username:
                         continue
+                    recs_found += 1
                     if rec_username.lower() in skip:
                         continue
                     if rec_username not in candidates:
@@ -262,8 +299,10 @@ class ChannelDiscovery:
                             "source": f"rec:{username}",
                         }
 
+                self._save_scanned_source(username, recs_found)
+
                 if (i + 1) % 20 == 0:
-                    logger.info(f"  Обработано {i+1}/{len(seed_channels)} каналов, "
+                    logger.info(f"  Обработано {i+1}/{len(new_seeds)} каналов, "
                                 f"найдено {len(candidates)} кандидатов")
 
                 await asyncio.sleep(random.uniform(API_DELAY_MIN, API_DELAY_MAX))

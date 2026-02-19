@@ -35,6 +35,9 @@ filters:
     - Купить
     - Заработок
 
+llm:
+  provider: claude
+
 processor:
   schedule_time: '05:00'  # 05:00 UTC = 08:00 MSK
   timezone: Europe/Moscow

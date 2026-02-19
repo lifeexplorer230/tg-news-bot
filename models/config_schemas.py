@@ -86,7 +86,7 @@ class LLMConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    provider: str = Field(default="gemini", pattern="^(gemini|openai|anthropic)$")
+    provider: str = Field(default="gemini", pattern="^(gemini|openai|anthropic|claude)$")
 
 
 class GeminiPromptsConfig(BaseModel):
@@ -113,6 +113,27 @@ class GeminiConfig(BaseModel):
         default_factory=GeminiPromptsConfig, description="Пути к промптам"
     )
 
+
+
+class ClaudePromptsConfig(BaseModel):
+    """Валидация claude.prompts"""
+
+    model_config = ConfigDict(extra="allow")
+
+    select_dynamic_categories: str | None = None
+
+
+class ClaudeConfig(BaseModel):
+    """Валидация секции claude"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: str = Field(default="claude-sonnet-4-6", description="Модель Claude")
+    max_tokens: int = Field(default=4096, ge=128, le=16384, description="Макс токенов")
+    temperature: float = Field(default=0.3, ge=0.0, le=1.0, description="Температура")
+    prompts: ClaudePromptsConfig = Field(
+        default_factory=ClaudePromptsConfig, description="Пути к промптам"
+    )
 
 class ListenerHealthcheckConfig(BaseModel):
     """Валидация listener.healthcheck"""
@@ -287,6 +308,7 @@ class AppConfig(BaseModel):
     )
     llm: LLMConfig = Field(default_factory=LLMConfig, description="LLM")
     gemini: GeminiConfig = Field(default_factory=GeminiConfig, description="Gemini")
+    claude: ClaudeConfig = Field(default_factory=ClaudeConfig, description="Claude")
     listener: ListenerConfig = Field(default_factory=ListenerConfig, description="Listener")
     filters: FiltersConfig = Field(default_factory=FiltersConfig, description="Фильтры")
     processor: ProcessorConfig = Field(default_factory=ProcessorConfig, description="Processor")
@@ -339,7 +361,7 @@ class EnvConfig(BaseModel):
         ..., min_length=32, max_length=32, description="Telegram API Hash"
     )
     TELEGRAM_PHONE: str = Field(..., pattern=r"^\+?\d{10,15}$", description="Telegram Phone")
-    GEMINI_API_KEY: str = Field(..., min_length=20, description="Gemini API Key")
+    GEMINI_API_KEY: str = Field(default="", description="Gemini API Key")
     MY_CHANNEL: str = Field(default="", description="Канал для публикации")
     MY_PERSONAL_ACCOUNT: str = Field(default="", description="Личный аккаунт")
     STATUS_BOT_TOKEN: str = Field(default="", description="Bot token для статус-репортов")
@@ -384,10 +406,5 @@ class EnvConfig(BaseModel):
     @field_validator("GEMINI_API_KEY")
     @classmethod
     def validate_gemini_key(cls, v: str) -> str:
-        """Валидация GEMINI_API_KEY"""
-        if len(v) < 20:
-            raise ValueError(
-                "GEMINI_API_KEY слишком короткий (минимум 20 символов). "
-                "Получите ключ на https://aistudio.google.com/apikey"
-            )
+        """Валидация GEMINI_API_KEY (опционально при использовании Claude)"""
         return v
