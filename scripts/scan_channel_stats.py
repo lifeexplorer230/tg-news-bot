@@ -57,10 +57,17 @@ async def scan_channel(client: TelegramClient, db: Database, channel: dict, dela
         full = await client(GetFullChannelRequest(entity))
         fc = full.full_chat
 
-        participants = getattr(entity, "participants_count", 0) or 0
-        avg_views = getattr(fc, "avg_message_views", 0) or 0
+        participants = getattr(fc, "participants_count", 0) or 0
         about = getattr(fc, "about", "") or ""
         contacts = extract_contacts(about)
+
+        # avg_views: среднее по последним 20 постам
+        views_list = [
+            msg.views
+            async for msg in client.iter_messages(entity, limit=20)
+            if msg.views
+        ]
+        avg_views = int(sum(views_list) / len(views_list)) if views_list else 0
 
         db.update_channel_stats(channel_id, participants, avg_views, about, contacts)
         logger.info(
