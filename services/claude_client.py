@@ -179,6 +179,53 @@ class ClaudeNewsClient:
         return text
 
     # ------------------------------------------------------------------
+    # Category quota enforcement
+    # ------------------------------------------------------------------
+
+    def _apply_category_quotas(
+        self,
+        all_categories: dict[str, list[dict]],
+        category_counts: dict[str, int],
+    ) -> dict[str, list[dict]]:
+        """
+        Распределяет новости по категориям с соблюдением квот.
+        Шаг 1: берём min(available, quota) из каждой категории (по score).
+        Шаг 2: остаток слотов заполняем лучшими новостями из surplus-категорий.
+        """
+        # Сортируем каждую категорию по score
+        for cat in all_categories:
+            all_categories[cat].sort(key=lambda x: x.get("score", 0), reverse=True)
+
+        final: dict[str, list[dict]] = {cat: [] for cat in category_counts}
+        surplus: list[dict] = []
+
+        # Шаг 1: берём квоту из каждой категории
+        for cat, quota in category_counts.items():
+            available = all_categories.get(cat, [])
+            final[cat] = list(available[:quota])
+            surplus.extend(available[quota:])
+
+        # Шаг 2: если какая-то категория недобрала — заполняем из surplus
+        total_filled = sum(len(v) for v in final.values())
+        total_target = sum(category_counts.values())
+        remaining_slots = total_target - total_filled
+
+        if remaining_slots > 0 and surplus:
+            surplus.sort(key=lambda x: x.get("score", 0), reverse=True)
+            for news in surplus:
+                if remaining_slots <= 0:
+                    break
+                # Найти первую категорию с незаполненной квотой
+                for cat, quota in category_counts.items():
+                    if len(final[cat]) < quota:
+                        news["category"] = cat
+                        final[cat].append(news)
+                        remaining_slots -= 1
+                        break
+
+        return final
+
+    # ------------------------------------------------------------------
     # Main method: select_by_categories
     # ------------------------------------------------------------------
 
@@ -188,6 +235,7 @@ class ClaudeNewsClient:
         category_counts: dict[str, int],
         chunk_size: int = 200,
         recently_published: list[str] | None = None,
+        category_descriptions: dict[str, str] | None = None,
     ) -> dict[str, list[dict]]:
         """
         Универсальный отбор новостей по категориям.
@@ -202,30 +250,20 @@ class ClaudeNewsClient:
                 len(messages), list(category_counts.keys()),
             )
             all_categories = self._process_dynamic_categories_chunk(
-                messages, category_counts, recently_published
+                messages, category_counts, recently_published, category_descriptions
             )
 
-            # Глобальная сортировка по score
-            all_news = []
+            # Помечаем каждую новость её категорией
             for cat_name, news_list in all_categories.items():
                 for news in news_list:
                     news["category"] = cat_name
-                    all_news.append(news)
 
-            all_news.sort(key=lambda x: x.get("score", 0), reverse=True)
-            total_target = sum(category_counts.values())
-            top_news = all_news[:total_target]
-
-            final_categories = {cat: [] for cat in category_counts.keys()}
-            for news in top_news:
-                category = news.get("category")
-                if category and category in final_categories:
-                    final_categories[category].append(news)
+            final_categories = self._apply_category_quotas(all_categories, category_counts)
 
             counts_str = ", ".join(
                 f"{cat}={len(items)}" for cat, items in final_categories.items()
             )
-            logger.info("Отобрано (по score): %s (топ-%d)", counts_str, total_target)
+            logger.info("Отобрано (по квотам): %s", counts_str)
             return final_categories
 
         # Chunking для больших списков
@@ -240,7 +278,7 @@ class ClaudeNewsClient:
         for i, chunk in enumerate(chunks, 1):
             logger.debug("Обработка чанка %d/%d (%d сообщений)", i, len(chunks), len(chunk))
             chunk_results = self._process_dynamic_categories_chunk(
-                chunk, category_counts, recently_published
+                chunk, category_counts, recently_published, category_descriptions
             )
             for cat_name in category_counts:
                 all_categories[cat_name].extend(chunk_results.get(cat_name, []))
@@ -253,29 +291,19 @@ class ClaudeNewsClient:
         # Deduplicate by source_message_id
         all_categories = self._deduplicate_by_source_id(all_categories, category_counts)
 
-        # Global sort by score
-        all_news = []
+        # Помечаем каждую новость её категорией
         for cat_name, news_list in all_categories.items():
             for news in news_list:
                 news["category"] = cat_name
-                all_news.append(news)
 
-        all_news.sort(key=lambda x: x.get("score", 0), reverse=True)
-        total_target = sum(category_counts.values())
-        top_news = all_news[:total_target]
-
-        final_categories = {cat: [] for cat in category_counts.keys()}
-        for news in top_news:
-            category = news.get("category")
-            if category and category in final_categories:
-                final_categories[category].append(news)
+        final_categories = self._apply_category_quotas(all_categories, category_counts)
 
         counts_str = ", ".join(
             f"{cat}={len(items)}" for cat, items in final_categories.items()
         )
         logger.info(
             "Claude отобрал: %s из %d сообщений (топ-%d)",
-            counts_str, len(messages), total_target,
+            counts_str, len(messages), sum(category_counts.values()),
         )
         return final_categories
 
@@ -288,6 +316,7 @@ class ClaudeNewsClient:
         messages: list[dict],
         category_counts: dict[str, int],
         recently_published: list[str] | None = None,
+        category_descriptions: dict[str, str] | None = None,
     ) -> dict[str, list[dict]]:
         """Обработать один чанк сообщений через Claude API."""
         request_id = self._generate_request_id()
@@ -298,10 +327,12 @@ class ClaudeNewsClient:
         json_structure_lines = []
         emojis = ["📦", "🔔", "📊", "🎮", "🎬", "🪙", "🤖", "💻"]
 
+        descs = category_descriptions or {}
         for idx, (cat_name, count) in enumerate(category_counts.items(), 1):
             emoji = emojis[idx % len(emojis)]
+            desc = descs.get(cat_name, f"новости категории '{cat_name}'")
             categories_description.append(
-                f"{emoji} {cat_name.upper()} ({count}) — новости категории '{cat_name}'"
+                f"{emoji} {cat_name.upper()} ({count}) — {desc}"
             )
             json_structure_lines.append(
                 f'  "{cat_name}": [{{"id": ..., "title": "...", "description": "...", "score": ..., "reason": "..."}}]'

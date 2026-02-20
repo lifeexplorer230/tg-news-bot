@@ -36,9 +36,9 @@ class ClaudeLLMClient(LLMClient):
     def rewrite_digest(self, posts, header, footer):
         return self._client.rewrite_digest(posts, header, footer)
 
-    def select_by_categories(self, messages, category_counts, chunk_size=50, recently_published=None):
+    def select_by_categories(self, messages, category_counts, chunk_size=50, recently_published=None, category_descriptions=None):
         return self._client.select_by_categories(
-            messages, category_counts, chunk_size, recently_published
+            messages, category_counts, chunk_size, recently_published, category_descriptions
         )
 
     @property

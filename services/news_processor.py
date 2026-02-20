@@ -117,6 +117,8 @@ class NewsProcessor:
         # Динамически читаем категории из конфига (универсальная система)
         # Поддерживает любые категории, не только marketplace-специфичные
         self.all_digest_counts = dict(counts_config) if counts_config else {}
+        descriptions_config = config.get("channels.all_digest.category_descriptions", {})
+        self.all_digest_descriptions = dict(descriptions_config) if descriptions_config else {}
 
         self.publication_header_template = config.get(
             "publication.header_template",
@@ -754,6 +756,7 @@ class NewsProcessor:
             unique_messages,
             category_counts=self.all_digest_counts,
             recently_published=topic_summaries,
+            category_descriptions=self.all_digest_descriptions,
         )
 
         # Подсчитываем сколько получилось (динамически для всех категорий)

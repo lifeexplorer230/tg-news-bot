@@ -39,6 +39,7 @@ class LLMClient(ABC):
         category_counts: dict[str, int],
         chunk_size: int = 50,
         recently_published: list[str] | None = None,
+        category_descriptions: dict[str, str] | None = None,
     ) -> dict[str, list[dict]]:
         """Универсальный отбор новостей по произвольным категориям."""
 
