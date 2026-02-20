@@ -203,6 +203,30 @@ class Database:
             """
             )
 
+            # Историческая таблица статистики каналов
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS channel_stats (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    channel_id INTEGER NOT NULL REFERENCES channels(id),
+                    scanned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    participants_count INTEGER DEFAULT 0,
+                    avg_message_views INTEGER DEFAULT 0,
+                    description TEXT,
+                    contact_info TEXT
+                )
+            """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_channel_stats_channel
+                ON channel_stats(channel_id, scanned_at DESC)
+            """
+            )
+
+            # Миграция channels_meta: добавить поля для описания и контактов
+            self._migrate_channels_meta(cursor)
+
             logger.info(f"База данных инициализирована: {self.db_path}")
 
     def _migrate_published_unique_constraint(self, cursor: sqlite3.Cursor):
@@ -254,6 +278,19 @@ class Database:
         """)
         logger.info("✅ Создан UNIQUE индекс idx_published_source_unique")
 
+    def _migrate_channels_meta(self, cursor: sqlite3.Cursor):
+        """Добавить поля description, contact_info, stats_updated_at в channels_meta если их нет."""
+        cursor.execute("PRAGMA table_info(channels_meta)")
+        existing = {row[1] for row in cursor.fetchall()}
+        for col, definition in [
+            ("description", "TEXT"),
+            ("contact_info", "TEXT"),
+            ("stats_updated_at", "TIMESTAMP"),
+        ]:
+            if col not in existing:
+                cursor.execute(f"ALTER TABLE channels_meta ADD COLUMN {col} {definition}")
+                logger.info("Добавлено поле %s в channels_meta", col)
+
     # ====== РАБОТА С КАНАЛАМИ ======
 
     @retry_on_locked
@@ -296,6 +333,31 @@ class Database:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM channels WHERE is_active = 1")
             return [dict(row) for row in cursor.fetchall()]
+
+    @retry_on_locked
+    def update_channel_stats(
+        self,
+        channel_id: int,
+        participants_count: int,
+        avg_message_views: int,
+        description: str,
+        contact_info: str,
+    ) -> None:
+        """Сохранить статистику канала: в историческую таблицу и обновить channels_meta."""
+        now = datetime.utcnow()
+        with self._pool.get_connection() as conn:
+            conn.execute(
+                """INSERT INTO channel_stats
+                   (channel_id, scanned_at, participants_count, avg_message_views, description, contact_info)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (channel_id, now, participants_count, avg_message_views, description, contact_info),
+            )
+            conn.execute(
+                """UPDATE channels_meta
+                   SET subscribers=?, avg_views=?, description=?, contact_info=?, stats_updated_at=?
+                   WHERE channel_id=?""",
+                (participants_count, avg_message_views, description, contact_info, now, channel_id),
+            )
 
     # ====== РАБОТА С СООБЩЕНИЯМИ ======
 
