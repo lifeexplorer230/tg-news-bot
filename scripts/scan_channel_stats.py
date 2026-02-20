@@ -78,12 +78,17 @@ async def scan_channel(
         about = getattr(fc, "about", "") or ""
         contacts = extract_contacts(about)
 
-        # avg_views: среднее по последним 20 постам
-        views_list = [
-            msg.views
-            async for msg in client.iter_messages(entity, limit=20)
-            if msg.views
-        ]
+        # avg_views: среднее по последним 20 постам + обновляем views/forwards в raw_messages
+        views_list = []
+        async for msg in client.iter_messages(entity, limit=20):
+            if msg.views:
+                views_list.append(msg.views)
+            # Обновляем views/forwards для уже сохранённых сообщений (бесплатно — запрос уже сделан)
+            with db._pool.get_connection() as conn:
+                conn.execute(
+                    "UPDATE raw_messages SET views=?, forwards=? WHERE channel_id=? AND message_id=?",
+                    (msg.views or 0, msg.forwards or 0, channel_id, msg.id),
+                )
         avg_views = int(sum(views_list) / len(views_list)) if views_list else 0
 
         db.update_channel_stats(channel_id, participants, avg_views, about, contacts)

@@ -147,12 +147,17 @@ class Database:
             """
             )
 
-            # Добавляем новое поле если его нет
+            # Добавляем новые поля если их нет
             cursor.execute("PRAGMA table_info(raw_messages)")
             columns = [col[1] for col in cursor.fetchall()]
-            if "rejection_reason" not in columns:
-                cursor.execute("ALTER TABLE raw_messages ADD COLUMN rejection_reason TEXT")
-                logger.info("Добавлено поле rejection_reason в raw_messages")
+            for col, definition in [
+                ("rejection_reason", "TEXT"),
+                ("views", "INTEGER DEFAULT 0"),
+                ("forwards", "INTEGER DEFAULT 0"),
+            ]:
+                if col not in columns:
+                    cursor.execute(f"ALTER TABLE raw_messages ADD COLUMN {col} {definition}")
+                    logger.info("Добавлено поле %s в raw_messages", col)
 
             # Индексы для raw_messages
             cursor.execute(
