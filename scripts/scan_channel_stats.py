@@ -4,7 +4,8 @@
 
 Запускает один раз обход всех активных каналов профиля.
 Задержка = 86400 / N_каналов (равномерно за 24 часа).
-Запускать раз в неделю через cron.
+Запускать раз в неделю через cron. Поддерживает resume: уже просканированные
+в этом запуске каналы пропускаются.
 
 Использование:
     sudo bash -c "cd /root/tg-news-bot && source venv/bin/activate && \
@@ -18,6 +19,7 @@ import asyncio
 import os
 import re
 import sys
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -44,15 +46,30 @@ def extract_contacts(text: str) -> str:
     return ", ".join(sorted(found))
 
 
-async def scan_channel(client: TelegramClient, db: Database, channel: dict, delay: float) -> bool:
+async def ensure_connected(client: TelegramClient, session_name: str) -> None:
+    """Переподключить клиент если он отвалился."""
+    if not client.is_connected():
+        logger.info("  🔄 Переподключение к Telegram...")
+        await safe_connect(client, session_name)
+
+
+async def scan_channel(
+    client: TelegramClient,
+    session_name: str,
+    db: Database,
+    channel: dict,
+    delay: float,
+) -> bool:
     """
     Сканировать один канал, сохранить статистику.
-    Возвращает True если обработан (успешно или пропущен), False если нужен повтор (FloodWait).
+    Возвращает True если обработан (успешно или пропущен), False если нужен повтор.
     """
     username = channel["username"]
     channel_id = channel["id"]
 
     try:
+        await ensure_connected(client, session_name)
+
         entity = await client.get_entity(username)
         full = await client(GetFullChannelRequest(entity))
         fc = full.full_chat
@@ -88,13 +105,34 @@ async def scan_channel(client: TelegramClient, db: Database, channel: dict, dela
 
     except (ChannelPrivateError, ChatAdminRequiredError) as e:
         logger.debug("  ⚠️  @%s недоступен: %s", username, e)
-        await asyncio.sleep(delay)
-        return True  # пропустить, идём дальше
+        await asyncio.sleep(min(delay, 10))
+        return True  # пропустить
 
     except Exception as e:
+        err = str(e)
+        if "disconnected" in err.lower():
+            # Не пропускаем — переподключимся и повторим
+            logger.warning("  🔌 @%s: соединение разорвано, переподключение...", username)
+            try:
+                await safe_connect(client, session_name)
+            except Exception as ce:
+                logger.error("  Переподключение не удалось: %s", ce)
+                await asyncio.sleep(10)
+            return False  # повторить
         logger.warning("  ❌ @%s: %s", username, e)
-        await asyncio.sleep(min(delay, 5))
+        await asyncio.sleep(min(delay, 10))
         return True  # пропустить
+
+
+def get_already_scanned_today(db: Database) -> set[int]:
+    """ID каналов с записью в channel_stats за последние 25 часов."""
+    cutoff = datetime.utcnow() - timedelta(hours=25)
+    with db._pool.get_connection() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT channel_id FROM channel_stats WHERE scanned_at >= ?",
+            (cutoff,),
+        ).fetchall()
+    return {row[0] for row in rows}
 
 
 async def main(profile: str):
@@ -108,20 +146,42 @@ async def main(profile: str):
     )
 
     db = Database(config.db_path, **config.database_settings())
-    channels = db.get_active_channels()
-    total = len(channels)
+    all_channels = db.get_active_channels()
+    total = len(all_channels)
 
     if total == 0:
         logger.error("Нет активных каналов в профиле %s", profile)
         sys.exit(1)
 
+    # Пропустить уже просканированные (для resume после сбоя)
+    already_done = get_already_scanned_today(db)
+    channels = [ch for ch in all_channels if ch["id"] not in already_done]
+    skipped_resume = total - len(channels)
+
     delay = 86400.0 / total
     logger.info("=" * 72)
     logger.info("📡 СКАНЕР СТАТИСТИКИ КАНАЛОВ — профиль: %s", profile)
-    logger.info("   Каналов: %d  |  Задержка: %.1f с (%.1f мин)  |  Итого: ~24 ч", total, delay, delay / 60)
+    logger.info(
+        "   Всего: %d  |  К сканированию: %d  |  Уже готово: %d",
+        total, len(channels), skipped_resume,
+    )
+    logger.info("   Задержка: %.1f с (%.1f мин)  |  Итого: ~24 ч", delay, delay / 60)
     logger.info("=" * 72)
 
-    session_name = config.get("telegram.session_name")
+    if not channels:
+        logger.info("✅ Все каналы уже просканированы сегодня.")
+        db.close()
+        return
+
+    # Используем processor-сессию, чтобы не конфликтовать с listener
+    base_session = config.get("telegram.session_name", "")
+    if base_session.endswith("/session"):
+        session_name = base_session[:-8] + "/processor"
+    elif base_session.endswith("/session.session"):
+        session_name = base_session[:-16] + "/processor"
+    else:
+        session_name = base_session + "_processor"
+
     client = TelegramClient(
         session_name,
         config.telegram_api_id,
@@ -132,34 +192,33 @@ async def main(profile: str):
         await safe_connect(client, session_name)
 
         scanned = 0
-        skipped = 0
         with_contacts = 0
         remaining = list(channels)
 
         while remaining:
             channel = remaining[0]
-            idx = total - len(remaining) + 1
+            idx = skipped_resume + (len(channels) - len(remaining)) + 1
             logger.info("[%d/%d] @%s", idx, total, channel["username"])
 
-            done = await scan_channel(client, db, channel, delay)
+            done = await scan_channel(client, session_name, db, channel, delay)
             if done:
                 remaining.pop(0)
                 scanned += 1
-                # Проверим сохранились ли контакты (из последней записи)
                 try:
                     with db._pool.get_connection() as conn:
                         row = conn.execute(
-                            "SELECT contact_info FROM channel_stats WHERE channel_id=? ORDER BY scanned_at DESC LIMIT 1",
+                            "SELECT contact_info FROM channel_stats "
+                            "WHERE channel_id=? ORDER BY scanned_at DESC LIMIT 1",
                             (channel["id"],),
                         ).fetchone()
                     if row and row[0]:
                         with_contacts += 1
                 except Exception:
                     pass
-            # else: FloodWait — повторим тот же канал
+            # else: разрыв/FloodWait — повторим тот же канал
 
         logger.info("=" * 72)
-        logger.info("✅ Сканирование завершено: %d каналов", scanned)
+        logger.info("✅ Сканирование завершено: %d новых + %d из кэша", scanned, skipped_resume)
         logger.info("📬 Каналов с контактами для рекламы: %d", with_contacts)
 
         # Топ-10 по подписчикам
