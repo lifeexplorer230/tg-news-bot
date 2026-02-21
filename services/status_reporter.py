@@ -1,5 +1,6 @@
 """Сервис отправки статуса бота в Telegram группу"""
 
+import os
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -192,7 +193,7 @@ class StatusReporter:
 
             # Проверяем наличие bot_token: сначала env, потом yaml
             bot_token = (
-                self.config.get_env("STATUS_BOT_TOKEN", "")
+                os.environ.get("STATUS_BOT_TOKEN", "")
                 or self.config.get("status.bot_token", "")
             ).strip()
 

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 import numpy as np
 from telethon import TelegramClient
+from telethon.errors import FloodWaitError
 
 from database.db import Database
 from models.category import Category
@@ -1575,12 +1576,30 @@ class NewsProcessor:
             digest_parts = [digest]
 
         # Публикация дайджеста
+        async def resolve_entity(channel: str, max_wait: int = 600):
+            """Резолвит entity канала с обработкой FloodWait.
+            Ждёт если FloodWait <= max_wait, иначе пробрасывает исключение."""
+            while True:
+                try:
+                    return await client.get_entity(channel)
+                except FloodWaitError as e:
+                    if e.seconds > max_wait:
+                        logger.error(
+                            "❌ FloodWait %ds при резолве %s превышает лимит %ds — пропускаем",
+                            e.seconds, channel, max_wait,
+                        )
+                        raise
+                    logger.warning(
+                        "⏳ FloodWait %ds при резолве %s — ждём...", e.seconds, channel
+                    )
+                    await asyncio.sleep(e.seconds + 1)
+
         preview_channel = (self.publication_preview_channel or "").strip()
         if preview_channel:
             try:
                 # Security: Rate limiting для защиты от Telegram API ban
                 # Получаем ID канала для per-chat limiting
-                preview_entity = await client.get_entity(preview_channel)
+                preview_entity = await resolve_entity(preview_channel)
                 for part in digest_parts:
                     await self._rate_limiter.acquire(
                         chat_id=preview_entity.id,
@@ -1593,7 +1612,7 @@ class NewsProcessor:
                 logger.error("Не удалось отправить превью в %s: %s", preview_channel, exc)
 
         # Публикуем в основной канал
-        target_entity = await client.get_entity(target_channel)
+        target_entity = await resolve_entity(target_channel)
         for part in digest_parts:
             await self._rate_limiter.acquire(
                 chat_id=target_entity.id,
@@ -1606,7 +1625,7 @@ class NewsProcessor:
         notify_account = (self.publication_notify_account or "").strip()
         if notify_account:
             try:
-                notify_entity = await client.get_entity(notify_account)
+                notify_entity = await resolve_entity(notify_account)
                 await self._rate_limiter.acquire(
                     chat_id=notify_entity.id,
                     endpoint="send_message",

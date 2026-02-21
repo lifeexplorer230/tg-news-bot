@@ -49,7 +49,8 @@ async def main(profile: str):
         # Формируем отчёт
         top_list = ""
         for i, ch in enumerate(disc_stats.get("top_channels", []), 1):
-            top_list += f"  {i}. @{ch['username']} — {ch['scoring']}pts, {ch['subscribers']} подп.\n"
+            scoring_str = f"{ch['scoring']}pts, " if ch.get("scoring") is not None else ""
+            top_list += f"  {i}. @{ch['username']} — {scoring_str}{ch['subscribers']} подп.\n"
 
         report = f"""📊 Отчёт Discovery [{profile}] за {today}
 
@@ -57,7 +58,7 @@ async def main(profile: str):
   • Всего активных: {db_stats['active_channels']}
   • Найдено через discovery: {disc_stats['total_discovered']}
   • Активных discovery: {disc_stats['active_discovered']}
-  • Средний scoring: {disc_stats['avg_scoring']}
+  • Средний scoring: {disc_stats.get('avg_scoring', 'н/д')}
 
 📈 Сегодня:
   • Подписок: {disc_stats['subscribed_today']}/{20}
