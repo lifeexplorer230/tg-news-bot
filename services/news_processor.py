@@ -1444,36 +1444,74 @@ class NewsProcessor:
         return "\n".join(lines)
 
     @staticmethod
-    def _split_digest_by_limit(lines: list[str], limit: int) -> list[str]:
+    @staticmethod
+    def _split_text_by_limit(text: str, limit: int) -> list[str]:
         """
-        Разбивает дайджест на несколько сообщений, если превышает лимит.
+        Разбивает готовый текст дайджеста на части не длиннее limit символов.
 
-        Args:
-            lines: Список строк дайджеста
-            limit: Максимальная длина одного сообщения
+        Алгоритм:
+        - Режем по абзацам (двойной перенос строки) — не рвём новость посередине
+        - Если один абзац сам по себе > limit — режем по строкам
+        - Добавляет метку «часть N/M» в конец каждой части (кроме последней если одна)
 
         Returns:
-            Список сообщений, каждое не превышает limit
+            Список строк-сообщений, каждое <= limit символов.
         """
-        parts = []
-        current_part = []
-        current_length = 0
+        SUFFIX_RESERVE = 20  # «\n\n📄 Часть 1/9» — запас под метку
+        effective_limit = limit - SUFFIX_RESERVE
 
-        for line in lines:
-            line_length = len(line) + 1  # +1 для \n
-            if current_length + line_length > limit and current_part:
-                # Сохраняем текущую часть и начинаем новую
-                parts.append("\n".join(current_part))
-                current_part = [line]
-                current_length = line_length
+        # Разбиваем на абзацы (блоки между пустыми строками)
+        paragraphs = text.split("\n\n")
+
+        parts: list[str] = []
+        current_chunks: list[str] = []
+        current_len = 0
+
+        for para in paragraphs:
+            para_len = len(para) + 2  # +2 за \n\n
+
+            # Абзац сам по себе слишком большой — режем по строкам
+            if para_len > effective_limit:
+                # Сначала сохраняем накопленное
+                if current_chunks:
+                    parts.append("\n\n".join(current_chunks))
+                    current_chunks = []
+                    current_len = 0
+                # Режем абзац по строкам
+                for line in para.split("\n"):
+                    line_len = len(line) + 1
+                    if current_len + line_len > effective_limit and current_chunks:
+                        parts.append("\n\n".join(current_chunks))
+                        current_chunks = [line]
+                        current_len = line_len
+                    else:
+                        current_chunks.append(line)
+                        current_len += line_len
+                continue
+
+            if current_len + para_len > effective_limit and current_chunks:
+                # Не влезает — сохраняем и начинаем новую часть
+                parts.append("\n\n".join(current_chunks))
+                current_chunks = [para]
+                current_len = para_len
             else:
-                current_part.append(line)
-                current_length += line_length
+                current_chunks.append(para)
+                current_len += para_len
 
-        if current_part:
-            parts.append("\n".join(current_part))
+        if current_chunks:
+            parts.append("\n\n".join(current_chunks))
+
+        # Добавляем метку «часть N/M» если частей больше одной
+        if len(parts) > 1:
+            total = len(parts)
+            parts = [f"{p}\n\n📄 Часть {i}/{total}" for i, p in enumerate(parts, 1)]
 
         return parts
+
+    @staticmethod
+    def _split_digest_by_limit(lines: list[str], limit: int) -> list[str]:
+        """Устаревший метод — делегирует в _split_text_by_limit."""
+        return NewsProcessor._split_text_by_limit("\n".join(lines), limit)
 
     @staticmethod
     def _ensure_post_fields(post: dict) -> dict:
@@ -1565,13 +1603,11 @@ class NewsProcessor:
         # Защита от превышения лимита Telegram (4096 символов)
         if len(digest) > self.TELEGRAM_MESSAGE_LIMIT:
             logger.warning(
-                f"⚠️ Дайджест превышает лимит Telegram ({len(digest)} > {self.TELEGRAM_MESSAGE_LIMIT}). "
-                "Разбиваем на части."
+                "⚠️ Дайджест превышает лимит Telegram (%d > %d). Разбиваем на части.",
+                len(digest), self.TELEGRAM_MESSAGE_LIMIT,
             )
-            # Для Claude-дайджеста lines может не существовать — разбиваем сам digest
-            if lines is None:
-                lines = digest.split("\n")
-            digest_parts = self._split_digest_by_limit(lines, self.TELEGRAM_MESSAGE_LIMIT)
+            digest_parts = self._split_text_by_limit(digest, self.TELEGRAM_MESSAGE_LIMIT)
+            logger.info("📄 Дайджест разбит на %d части", len(digest_parts))
         else:
             digest_parts = [digest]
 
