@@ -1567,49 +1567,58 @@ class NewsProcessor:
                 footer_text = footer
 
         # Пробуем переписать дайджест через LLM (второй проход Claude)
+        # Если LLM-дайджест не влезает — обрезаем посты и повторяем
         digest = ""
-        lines = None
-        try:
-            rewritten = await asyncio.to_thread(
-                self.llm_client.rewrite_digest,
-                posts,
-                header_line.strip(),
-                footer_text,
-            )
-            if rewritten:
-                digest = rewritten
-                logger.info("\u270d\ufe0f Дайджест переписан через LLM (%d символов)", len(digest))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("LLM rewrite_digest не удался, используем шаблон: %s", exc)
+        active_posts = list(posts)
 
-        # Fallback: шаблонное форматирование
-        if not digest:
-            lines = [header_line.strip() + "\n"]
+        while True:
+            if not active_posts:
+                digest = header_line.strip() + "\n\n" + footer_text
+                logger.warning("⚠️ Все посты обрезаны — публикуем только заголовок")
+                break
 
-            for idx, post in enumerate(posts, 1):
-                post = self._ensure_post_fields(post)
-                emoji = NUMBER_EMOJIS.get(idx, f"{idx}" + "\ufe0f\u20e3")
-                lines.append(f"{emoji} **{post['title']}**\n")
-                lines.append(f"{post['description']}\n")
+            try:
+                rewritten = await asyncio.to_thread(
+                    self.llm_client.rewrite_digest,
+                    active_posts,
+                    header_line.strip(),
+                    footer_text,
+                )
+                if rewritten:
+                    digest = rewritten
+                    logger.info("✍️ Дайджест переписан через LLM (%d символов, %d новостей)",
+                                len(digest), len(active_posts))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("LLM rewrite_digest не удался, используем шаблон: %s", exc)
 
-                if post.get("source_link"):
-                    lines.append(f"{post['source_link']}\n")
+            # Fallback: шаблонное форматирование
+            if not digest:
+                lines = [header_line.strip() + "\n"]
+                for idx, post in enumerate(active_posts, 1):
+                    post = self._ensure_post_fields(post)
+                    emoji = NUMBER_EMOJIS.get(idx, f"{idx}" + "\ufe0f\u20e3")
+                    lines.append(f"{emoji} **{post['title']}**\n")
+                    lines.append(f"{post['description']}\n")
+                    if post.get("source_link"):
+                        lines.append(f"{post['source_link']}\n")
+                if footer_text:
+                    lines.append(footer_text)
+                digest = "\n".join(lines)
 
-            if footer_text:
-                lines.append(footer_text)
+            # Влезает — выходим
+            if len(digest) <= self.TELEGRAM_MESSAGE_LIMIT:
+                break
 
-            digest = "\n".join(lines)
-
-        # Защита от превышения лимита Telegram (4096 символов)
-        if len(digest) > self.TELEGRAM_MESSAGE_LIMIT:
+            # Не влезает — убираем последнюю новость и пробуем снова
+            dropped = active_posts.pop()
             logger.warning(
-                "⚠️ Дайджест превышает лимит Telegram (%d > %d). Разбиваем на части.",
+                "⚠️ Дайджест %d симв > %d лимит. Убираем последнюю новость ('%s'), осталось %d.",
                 len(digest), self.TELEGRAM_MESSAGE_LIMIT,
+                dropped.get("title", "?")[:50], len(active_posts),
             )
-            digest_parts = self._split_text_by_limit(digest, self.TELEGRAM_MESSAGE_LIMIT)
-            logger.info("📄 Дайджест разбит на %d части", len(digest_parts))
-        else:
-            digest_parts = [digest]
+            digest = ""  # сбрасываем для следующей итерации
+
+        digest_parts = [digest]
 
         # Публикация дайджеста
         async def resolve_entity(channel: str, max_wait: int = 600):
