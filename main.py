@@ -198,29 +198,29 @@ def schedule_processor(config):
     logger.info(f"⏰ Настройка расписания processor: каждый день в {schedule_time} ({timezone})")
 
     def run_processor_sync():
-        """Синхронная обёртка для запуска processor через subprocess"""
-        logger.info("🔄 Запуск Processor по расписанию...")
-        try:
-            # Запускаем processor как отдельный процесс
-            result = subprocess.run(
-                [sys.executable, __file__, "processor", "--profile", profile],
-                cwd=os.getcwd(),
-                timeout=10800,  # 3 часа timeout
-                capture_output=True,
-                text=True
-            )
+        """Запускает processor в отдельном daemon-треде, не блокируя планировщик"""
+        def task():
+            logger.info("🔄 Запуск Processor в фоновом потоке...")
+            try:
+                result = subprocess.run(
+                    [sys.executable, __file__, "processor", "--profile", profile],
+                    cwd=os.getcwd(),
+                    timeout=10800,  # 3 часа timeout
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode != 0:
+                    logger.error(f"❌ Processor завершился с ошибкой (код {result.returncode})")
+                    if result.stderr:
+                        logger.error(f"STDERR: {result.stderr[:1000]}")
+                else:
+                    logger.info("✅ Processor успешно завершён")
+            except subprocess.TimeoutExpired:
+                logger.error("❌ Processor превысил timeout (3 часа)")
+            except Exception as e:
+                logger.error(f"❌ Ошибка при запуске processor: {e}", exc_info=True)
 
-            if result.returncode != 0:
-                logger.error(f"❌ Processor завершился с ошибкой (код {result.returncode})")
-                if result.stderr:
-                    logger.error(f"STDERR: {result.stderr[:1000]}")
-            else:
-                logger.info("✅ Processor успешно завершён")
-
-        except subprocess.TimeoutExpired:
-            logger.error("❌ Processor превысил timeout (3 часа)")
-        except Exception as e:
-            logger.error(f"❌ Ошибка при запуске processor: {e}", exc_info=True)
+        threading.Thread(target=task, daemon=True).start()
 
     schedule.every().day.at(schedule_time).do(run_processor_sync)
 

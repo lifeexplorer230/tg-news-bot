@@ -268,8 +268,14 @@ class TelegramListener:
                 logger.debug("Сообщение слишком короткое после санитизации")
                 return
 
-            # Фильтры
-            if len(text) < self.min_message_length:
+            # Фильтры: для постов с медиа снижаем порог до 10 символов
+            has_media = bool(message.media)
+            current_min_length = 10 if has_media else self.min_message_length
+            if len(text) < current_min_length:
+                logger.debug(
+                    "Message dropped: text too short (%d chars). Media: %s",
+                    len(text), has_media,
+                )
                 return
 
             # Проверка на исключаемые ключевые слова

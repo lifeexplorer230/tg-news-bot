@@ -555,11 +555,14 @@ class GeminiClient:
             # Детальное логирование
             self._log_api_call("format_news_post", prompt, result_text, duration)
 
-            # Извлекаем JSON из ответа
-            if "```json" in result_text:
-                result_text = result_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in result_text:
-                result_text = result_text.split("```")[1].split("```")[0].strip()
+            # Извлекаем JSON из ответа через re.search (устойчиво к нестандартному markdown)
+            json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", result_text, re.DOTALL)
+            if json_match:
+                result_text = json_match.group(1).strip()
+            else:
+                bracket_match = re.search(r"(\{.*\})", result_text, re.DOTALL)
+                if bracket_match:
+                    result_text = bracket_match.group(1).strip()
 
             formatted = json.loads(result_text)
 
