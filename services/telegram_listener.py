@@ -308,6 +308,8 @@ class TelegramListener:
                 text=text,
                 date=message.date,
                 has_media=has_media,
+                views=getattr(message, "views", 0) or 0,
+                forwards=getattr(message, "forwards", 0) or 0,
             )
 
             if saved_id:

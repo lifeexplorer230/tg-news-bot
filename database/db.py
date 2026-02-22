@@ -368,7 +368,8 @@ class Database:
 
     @retry_on_locked
     def save_message(
-        self, channel_id: int, message_id: int, text: str, date: datetime, has_media: bool = False
+        self, channel_id: int, message_id: int, text: str, date: datetime,
+        has_media: bool = False, views: int = 0, forwards: int = 0,
     ) -> int | None:
         """
         Сохранить сообщение из канала
@@ -379,6 +380,8 @@ class Database:
             text: Текст сообщения
             date: Дата сообщения
             has_media: Есть ли медиа
+            views: Количество просмотров на момент сохранения
+            forwards: Количество пересылок на момент сохранения
 
         Returns:
             ID записи или None если уже существует
@@ -389,10 +392,10 @@ class Database:
                 cursor.execute(
                     """
                     INSERT INTO raw_messages
-                    (channel_id, message_id, text, date, has_media)
-                    VALUES (?, ?, ?, ?, ?)
+                    (channel_id, message_id, text, date, has_media, views, forwards)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                    (channel_id, message_id, text, date, has_media),
+                    (channel_id, message_id, text, date, has_media, views or 0, forwards or 0),
                 )
                 return cursor.lastrowid
             except sqlite3.IntegrityError:
