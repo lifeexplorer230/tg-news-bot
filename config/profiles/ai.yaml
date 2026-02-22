@@ -8,6 +8,7 @@ paths:
 
 telegram:
   session_name: ./sessions/ai/session
+  publisher_session_name: ./sessions/publisher/processor
 
 publication:
   channel: '@rnpii'

@@ -1621,9 +1621,10 @@ class NewsProcessor:
         digest_parts = [digest]
 
         # Публикация дайджеста
-        async def resolve_entity(channel: str, max_wait: int = 600):
+        async def resolve_entity(channel: str, max_wait: int = 3600):
             """Резолвит entity канала с обработкой FloodWait.
-            Ждёт если FloodWait <= max_wait, иначе пробрасывает исключение."""
+            Ждёт если FloodWait <= max_wait, иначе пробрасывает исключение.
+            Увеличен до 3600s: с отдельным publisher-аккаунтом лучше подождать, чем пропустить дайджест."""
             while True:
                 try:
                     return await client.get_entity(channel)

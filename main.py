@@ -135,22 +135,25 @@ async def run_processor_mode(config: Config | None = None):
         )
         logger.setLevel(getattr(logging, config.log_level.upper(), logging.INFO))
 
-    # Используем отдельный session файл для processor, чтобы избежать конфликта с listener
-    # Заменяем последний "/session" на "/processor" в пути к session файлу
-    original_session = config.get("telegram.session_name", "")
-    if original_session:
-        if original_session.endswith("/session"):
-            # Путь типа "./sessions/marketplace/session"
-            processor_session = original_session[:-8] + "/processor"  # убираем "/session", добавляем "/processor"
-        elif original_session.endswith("session"):
-            # Путь типа "./sessions/marketplace/session" (без слеша)
-            processor_session = original_session[:-7] + "processor"
-        else:
-            # Неожиданный формат - добавим "_processor" к имени
-            processor_session = original_session + "_processor"
-
-        config.config["telegram"]["session_name"] = processor_session
-        logger.info(f"📝 Использую отдельную сессию для processor: {processor_session}")
+    # Используем publisher_session_name если задан (отдельный аккаунт для публикации),
+    # иначе деривируем processor сессию из listener сессии
+    publisher_session = config.get("telegram.publisher_session_name")
+    if publisher_session:
+        import os
+        os.makedirs(os.path.dirname(publisher_session), exist_ok=True)
+        config.config["telegram"]["session_name"] = publisher_session
+        logger.info(f"📝 Использую publisher сессию (отдельный аккаунт): {publisher_session}")
+    else:
+        original_session = config.get("telegram.session_name", "")
+        if original_session:
+            if original_session.endswith("/session"):
+                processor_session = original_session[:-8] + "/processor"
+            elif original_session.endswith("session"):
+                processor_session = original_session[:-7] + "processor"
+            else:
+                processor_session = original_session + "_processor"
+            config.config["telegram"]["session_name"] = processor_session
+            logger.info(f"📝 Использую отдельную сессию для processor: {processor_session}")
 
     logger.info("=" * 80)
     logger.info("⚙️  ЗАПУСК PROCESSOR - News Bot")

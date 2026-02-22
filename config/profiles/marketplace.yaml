@@ -8,6 +8,7 @@ paths:
 
 telegram:
   session_name: ./sessions/marketplace/session
+  publisher_session_name: ./sessions/publisher/processor
 
 publication:
   channel: '@rnpozwb'
@@ -41,7 +42,7 @@ claude:
 processor:
   schedule_time: '06:00'  # 06:00 UTC = 09:00 MSK
   timezone: Europe/Moscow
-  duplicate_threshold: 0.85
+  duplicate_threshold: 0.70
   top_n: 15
   exclude_count: 5
 
